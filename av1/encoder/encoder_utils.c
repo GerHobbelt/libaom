@@ -311,7 +311,7 @@ static void configure_static_seg_features(AV1_COMP *cpi) {
   struct segmentation *const seg = &cm->seg;
 
   double avg_q;
-#if CONFIG_FRAME_PARALLEL_ENCODE && CONFIG_FPMT_TEST
+#if CONFIG_FPMT_TEST
   avg_q = ((cpi->ppi->gf_group.frame_parallel_level[cpi->gf_frame_index] > 0) &&
            (cpi->ppi->fpmt_unit_test_cfg == PARALLEL_SIMULATION_ENCODE))
               ? cpi->ppi->p_rc.temp_avg_q
@@ -792,7 +792,10 @@ BLOCK_SIZE av1_select_sb_size(const AV1EncoderConfig *const oxcf, int width,
                ? BLOCK_128X128
                : BLOCK_64X64;
   } else if (oxcf->mode == REALTIME) {
-    return AOMMIN(width, height) > 720 ? BLOCK_128X128 : BLOCK_64X64;
+    if (oxcf->tune_cfg.content == AOM_CONTENT_SCREEN)
+      return AOMMIN(width, height) >= 720 ? BLOCK_128X128 : BLOCK_64X64;
+    else
+      return AOMMIN(width, height) > 720 ? BLOCK_128X128 : BLOCK_64X64;
   }
 
   // TODO(any): Possibly could improve this with a heuristic.
@@ -914,7 +917,7 @@ static void screen_content_tools_determination(
   AV1_COMMON *const cm = &cpi->common;
   FeatureFlags *const features = &cm->features;
 
-#if CONFIG_FRAME_PARALLEL_ENCODE && CONFIG_FPMT_TEST
+#if CONFIG_FPMT_TEST
   projected_size_pass[pass] =
       ((cpi->ppi->gf_group.frame_parallel_level[cpi->gf_frame_index] > 0) &&
        (cpi->ppi->fpmt_unit_test_cfg == PARALLEL_SIMULATION_ENCODE))
@@ -1253,9 +1256,7 @@ int av1_is_integer_mv(const YV12_BUFFER_CONFIG *cur_picture,
 
 void av1_set_mb_ssim_rdmult_scaling(AV1_COMP *cpi) {
   const CommonModeInfoParams *const mi_params = &cpi->common.mi_params;
-  ThreadData *td = &cpi->td;
-  MACROBLOCK *x = &td->mb;
-  MACROBLOCKD *xd = &x->e_mbd;
+  const MACROBLOCKD *const xd = &cpi->td.mb.e_mbd;
   uint8_t *y_buffer = cpi->source->y_buffer;
   const int y_stride = cpi->source->y_stride;
   const int block_size = BLOCK_16X16;
@@ -1265,7 +1266,6 @@ void av1_set_mb_ssim_rdmult_scaling(AV1_COMP *cpi) {
   const int num_cols = (mi_params->mi_cols + num_mi_w - 1) / num_mi_w;
   const int num_rows = (mi_params->mi_rows + num_mi_h - 1) / num_mi_h;
   double log_sum = 0.0;
-  const int use_hbd = cpi->source->flags & YV12_FLAG_HIGHBITDEPTH;
 
   // Loop through each 16x16 block.
   for (int row = 0; row < num_rows; ++row) {
@@ -1287,13 +1287,8 @@ void av1_set_mb_ssim_rdmult_scaling(AV1_COMP *cpi) {
           buf.buf = y_buffer + row_offset_y * y_stride + col_offset_y;
           buf.stride = y_stride;
 
-          if (use_hbd) {
-            var += av1_high_get_sby_perpixel_variance(cpi, &buf, BLOCK_8X8,
-                                                      xd->bd);
-          } else {
-            var += av1_get_sby_perpixel_variance(cpi, &buf, BLOCK_8X8);
-          }
-
+          var += av1_get_perpixel_variance_facade(cpi, xd, &buf, BLOCK_8X8,
+                                                  AOM_PLANE_Y);
           num_of_var += 1.0;
         }
       }

@@ -13,39 +13,71 @@
 #define AOM_AV1_RATECTRL_QMODE_INTERFACE_H_
 
 #include <array>
+#include <string>
 #include <vector>
 
+#include "aom/aom_codec.h"
 #include "av1/encoder/firstpass.h"
 
 namespace aom {
 
 constexpr int kBlockRefCount = 2;
-constexpr int kRefFrameTableSize = 7;
 
 struct MotionVector {
-  int row;          // subpel row
-  int col;          // subpel col
+  int row;  // subpel row
+  int col;  // subpel col
+  // TODO(b/241589513): Move this to TPLFrameStats; it's wasteful to code it
+  // separately for each block.
   int subpel_bits;  // number of fractional bits used by row/col
 };
 
 struct RateControlParam {
+  // Range of allowed GOP sizes (number of displayed frames).
   int max_gop_show_frame_count;
   int min_gop_show_frame_count;
+  // Number of reference frame buffers, i.e., size of the DPB.
+  int ref_frame_table_size;
+  // Maximum number of references a single frame may use.
   int max_ref_frames;
+  // Maximum pyramid depth. e.g., 1 means only one ARF per GOP,
+  // 2 would allow an additional level of intermediate ARFs.
+  int max_depth;
+
   int base_q_index;
+
   int frame_width;
   int frame_height;
 };
 
 struct TplBlockStats {
-  int height;  // pixel height
-  int width;   // pixel width
-  int row;     // pixel row of the top left corner
-  int col;     // pixel col of the top lef corner
+  int16_t height;  // Pixel height.
+  int16_t width;   // Pixel width.
+  int16_t row;     // Pixel row of the top left corner.
+  int16_t col;     // Pixel col of the top lef corner.
   int64_t intra_cost;
   int64_t inter_cost;
+
+  // Valid only if TplFrameStats::rate_dist_present is true:
+  int64_t recrf_rate;  // Bits when using recon as reference.
+  int64_t recrf_dist;  // Distortion when using recon as reference.
+
   std::array<MotionVector, kBlockRefCount> mv;
   std::array<int, kBlockRefCount> ref_frame_index;
+};
+
+// gop frame type used for facilitate setting up GopFrame
+// TODO(angiebird): Define names for forward key frame and
+// key frame with overlay
+enum class GopFrameType {
+  kRegularKey,     // High quality key frame without overlay
+  kRegularLeaf,    // Regular leaf frame
+  kRegularGolden,  // Regular golden frame
+  kRegularArf,  // High quality arf with strong filtering followed by an overlay
+                // later
+  kOverlay,     // Overlay frame
+  kIntermediateOverlay,  // Intermediate overlay frame
+  kIntermediateArf,  // Good quality arf with weak or no filtering followed by a
+                     // show_existing later
 };
 
 enum class EncodeRefMode {
@@ -66,6 +98,62 @@ enum class ReferenceName {
   kAltrefFrame = 7,
 };
 
+struct Status {
+  aom_codec_err_t code;
+  std::string message;  // Empty if code == AOM_CODEC_OK.
+  bool ok() const { return code == AOM_CODEC_OK; }
+};
+
+// A very simple imitation of absl::StatusOr, this is conceptually a union of a
+// Status struct and an object of type T. It models an object that is either a
+// usable object, or an error explaining why such an object is not present. A
+// StatusOr<T> may never hold a status with a code of AOM_CODEC_OK.
+template <typename T>
+class StatusOr {
+ public:
+  StatusOr(const T &value) : value_(value) {}
+  StatusOr(T &&value) : value_(std::move(value)) {}
+  StatusOr(Status status) : status_(std::move(status)) {
+    assert(status_.code != AOM_CODEC_OK);
+  }
+
+  const Status &status() const { return status_; }
+  bool ok() const { return status().ok(); }
+
+  // operator* returns the value; it should only be called after checking that
+  // ok() returns true.
+  const T &operator*() const & { return value_; }
+  T &operator*() & { return value_; }
+  const T &&operator*() const && { return value_; }
+  T &&operator*() && { return std::move(value_); }
+
+  // sor->field is equivalent to (*sor).field.
+  const T *operator->() const & { return &value_; }
+  T *operator->() & { return &value_; }
+
+  // value() is equivalent to operator*, but asserts that ok() is true.
+  const T &value() const & {
+    assert(ok());
+    return value_;
+  }
+  T &value() & {
+    assert(ok());
+    return value_;
+  }
+  const T &&value() const && {
+    assert(ok());
+    return value_;
+  }
+  T &&value() && {
+    assert(ok());
+    return std::move(value_);
+  }
+
+ private:
+  T value_;  // This could be std::optional<T> if it were available.
+  Status status_ = { AOM_CODEC_OK, "" };
+};
+
 struct ReferenceFrame {
   int index;  // Index of reference slot containing the reference frame
   ReferenceName name;
@@ -74,8 +162,10 @@ struct ReferenceFrame {
 struct GopFrame {
   // basic info
   bool is_valid;
-  int order_idx;   // Index in display order in a GOP
-  int coding_idx;  // Index in coding order in a GOP
+  int order_idx;    // Index in display order in a GOP
+  int coding_idx;   // Index in coding order in a GOP
+  int display_idx;  // The number of displayed frames preceding this frame in
+                    // a GOP
 
   int global_order_idx;   // Index in display order in the whole video chunk
   int global_coding_idx;  // Index in coding order in the whole video chunk
@@ -87,6 +177,9 @@ struct GopFrame {
   bool is_show_frame;    // Is this frame a show frame after coding
   bool is_golden_frame;  // Is this a high quality frame
 
+  GopFrameType update_type;  // This is a redundant field. It is only used for
+                             // easy conversion in SW integration.
+
   // reference frame info
   EncodeRefMode encode_ref_mode;
   int colocated_ref_idx;  // colocated_ref_idx == -1 when encode_ref_mode ==
@@ -97,7 +190,7 @@ struct GopFrame {
   std::vector<ReferenceFrame>
       ref_frame_list;  // A list of available reference frames in priority order
                        // for the current to-be-coded frame. The list size
-                       // should be less or equal to kRefFrameTableSize. The
+                       // should be less or equal to ref_frame_table_size. The
                        // reference frames with smaller indices are more likely
                        // to be a good reference frame. Therefore, they should
                        // be prioritized when the reference frame count is
@@ -114,6 +207,9 @@ struct GopStruct {
   int show_frame_count;
   int global_coding_idx_offset;
   int global_order_idx_offset;
+  // TODO(jingning): This can be removed once the framework is up running.
+  int display_tracker;  // Track the number of frames displayed proceeding a
+                        // current coding frame.
   std::vector<GopFrame> gop_frame_list;
 };
 
@@ -130,7 +226,10 @@ struct FirstpassInfo {
   std::vector<FIRSTPASS_STATS> stats_list;
 };
 
-using RefFrameTable = std::array<GopFrame, kRefFrameTableSize>;
+// In general, the number of elements in RefFrameTable must always equal
+// ref_frame_table_size (as specified in RateControlParam), but see
+// GetGopEncodeInfo for the one exception.
+using RefFrameTable = std::vector<GopFrame>;
 
 struct GopEncodeInfo {
   std::vector<FrameEncodeParameters> param_list;
@@ -141,6 +240,7 @@ struct TplFrameStats {
   int min_block_size;
   int frame_width;
   int frame_height;
+  bool rate_dist_present;  // True if recrf_rate and recrf_dist are populated.
   std::vector<TplBlockStats> block_stats_list;
 };
 
@@ -153,16 +253,19 @@ class AV1RateControlQModeInterface {
   AV1RateControlQModeInterface();
   virtual ~AV1RateControlQModeInterface();
 
-  virtual void SetRcParam(const RateControlParam &rc_param) = 0;
-  virtual GopStructList DetermineGopInfo(
+  virtual Status SetRcParam(const RateControlParam &rc_param) = 0;
+  virtual StatusOr<GopStructList> DetermineGopInfo(
       const FirstpassInfo &firstpass_info) = 0;
-  // Accept firstpass and tpl info from the encoder and return q index and
+  // Accept firstpass and TPL info from the encoder and return q index and
   // rdmult. This needs to be called with consecutive GOPs as returned by
   // DetermineGopInfo.
-  virtual GopEncodeInfo GetGopEncodeInfo(
+  // For the first GOP, a default-constructed RefFrameTable may be passed in as
+  // ref_frame_table_snapshot_init; for subsequent GOPs, it should be the
+  // final_snapshot returned on the previous call.
+  virtual StatusOr<GopEncodeInfo> GetGopEncodeInfo(
       const GopStruct &gop_struct, const TplGopStats &tpl_gop_stats,
       const RefFrameTable &ref_frame_table_snapshot_init) = 0;
-};  // class AV1RateCtrlQMode
+};
 }  // namespace aom
 
 #endif  // AOM_AV1_RATECTRL_QMODE_INTERFACE_H_
