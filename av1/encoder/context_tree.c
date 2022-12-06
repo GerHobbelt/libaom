@@ -96,7 +96,7 @@ PICK_MODE_CONTEXT *av1_alloc_pmc(const struct AV1_COMP *const cpi,
 
   if (num_pix <= MAX_PALETTE_SQUARE) {
     for (int i = 0; i < 2; ++i) {
-      if (!cpi->sf.rt_sf.use_nonrd_pick_mode || frame_is_intra_only(cm)) {
+      if (cm->features.allow_screen_content_tools) {
         AOM_CHECK_MEM_ERROR(
             &error, ctx->color_index_map[i],
             aom_memalign(32, num_pix * sizeof(*ctx->color_index_map[i])));
@@ -218,6 +218,11 @@ void av1_free_pc_tree_recursive(PC_TREE *pc_tree, int num_planes, int keep_best,
 }
 
 void av1_setup_sms_tree(AV1_COMP *const cpi, ThreadData *td) {
+  // The structure 'sms_tree' is used to store the simple motion search data for
+  // partition pruning in inter frames. Hence, the memory allocations and
+  // initializations related to it are avoided for allintra encoding mode.
+  if (cpi->oxcf.kf_cfg.key_freq_max == 0) return;
+
   AV1_COMMON *const cm = &cpi->common;
   const int stat_generation_stage = is_stat_generation_stage(cpi);
   const int is_sb_size_128 = cm->seq_params->sb_size == BLOCK_128X128;

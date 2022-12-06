@@ -359,6 +359,24 @@ typedef enum {
   PRUNE_MESH_SEARCH_LVL_2 = 2,    /*!< Prune mesh search level 2. */
 } PRUNE_MESH_SEARCH_LEVEL;
 
+/*!\enum INTER_SEARCH_EARLY_TERM_IDX
+ * \brief This enumeration defines inter search early termination index in
+ * non-rd path based on sse value.
+ */
+typedef enum {
+  EARLY_TERM_DISABLED =
+      0, /*!< Early terminate inter mode search based on sse disabled. */
+  EARLY_TERM_IDX_1 =
+      1, /*!< Early terminate inter mode search based on sse, index 1. */
+  EARLY_TERM_IDX_2 =
+      2, /*!< Early terminate inter mode search based on sse, index 2. */
+  EARLY_TERM_IDX_3 =
+      3, /*!< Early terminate inter mode search based on sse, index 3. */
+  EARLY_TERM_IDX_4 =
+      4, /*!< Early terminate inter mode search based on sse, index 4. */
+  EARLY_TERM_INDICES, /*!< Total number of early terminate indices */
+} INTER_SEARCH_EARLY_TERM_IDX;
+
 /*!
  * \brief Sequence/frame level speed vs quality features
  */
@@ -408,6 +426,12 @@ typedef struct HIGH_LEVEL_SPEED_FEATURES {
    * Enable/disable second_alt_ref temporal filtering.
    */
   int second_alt_ref_filtering;
+
+  /*!
+   * Number of frames to be used in temporal filtering controlled based on noise
+   * levels and arf-q.
+   */
+  int num_frames_used_in_tf;
 } HIGH_LEVEL_SPEED_FEATURES;
 
 /*!
@@ -762,6 +786,9 @@ typedef struct MV_SPEED_FEATURES {
   // 1: use var as the metric
   // 2: disable second MV
   int disable_second_mv;
+
+  // Skips full pixel search based on start mv of prior ref_mv_idx.
+  int skip_fullpel_search_using_startmv;
 } MV_SPEED_FEATURES;
 
 typedef struct INTER_MODE_SPEED_FEATURES {
@@ -1272,8 +1299,12 @@ typedef struct REAL_TIME_SPEED_FEATURES {
   // check intra prediction for non-RD mode.
   int check_intra_pred_nonrd;
 
-  // skip checking intra prediction if TX is skipped
-  int skip_intra_pred_if_tx_skip;
+  // Skip checking intra prediction.
+  // 0 - don't skip
+  // 1 - skip if TX is skipped and best mode is not NEWMV
+  // 2 - skip if TX is skipped
+  // Skipping aggressiveness increases from level 1 to 2.
+  int skip_intra_pred;
 
   // Perform coarse ME before calculating variance in variance-based partition
   int estimate_motion_for_var_based_partition;
@@ -1282,6 +1313,7 @@ typedef struct REAL_TIME_SPEED_FEATURES {
   // 0 - don't check merge
   // 1 - always check merge
   // 2 - check merge and prune checking final split
+  // 3 - check merge and prune checking final split based on bsize and qindex
   int nonrd_check_partition_merge_mode;
 
   // For nonrd_use_partition: check of leaf partition extra split
@@ -1336,9 +1368,11 @@ typedef struct REAL_TIME_SPEED_FEATURES {
   // If set forces interpolation filter to EIGHTTAP_REGULAR
   int skip_interp_filter_search;
 
-  // For nonrd mode: use hybrid (rd for bsize < 16x16, otherwise nonrd)
-  // intra mode search for intra only frames. If set to 0 then nonrd pick
-  // intra is used for all blocks.
+  // For nonrd mode: use hybrid intra mode search for intra only frames based on
+  // block properties.
+  // 0 : use nonrd pick intra for all blocks
+  // 1 : use rd for bsize < 16x16, nonrd otherwise
+  // 2 : use rd for bsize < 16x16 and src var >= 101, nonrd otherwise
   int hybrid_intra_pickmode;
 
   // Compute variance/sse on source difference, prior to encoding superblock.
@@ -1412,6 +1446,33 @@ typedef struct REAL_TIME_SPEED_FEATURES {
 
   // Enable GF refresh based on Q value.
   int gf_refresh_based_on_qp;
+
+  // Temporal filtering
+  int use_rtc_tf;
+
+  // Prune the use of the identity transform in nonrd_pickmode,
+  // used for screen content mode: only for smaller blocks
+  // and higher spatial variance, and when skip_txfm is not
+  // already set.
+  int prune_idtx_nonrd;
+
+  // Skip loopfilter, for static content after slide change
+  // or key frame, once quality has ramped up.
+  int skip_lf_screen;
+
+  // For nonrd: early exit out of variance partition that sets the
+  // block size to superblock size, and sets mode to zeromv-last skip.
+  int part_early_exit_zeromv;
+
+  // Early terminate inter mode search based on sse in non-rd path.
+  INTER_SEARCH_EARLY_TERM_IDX sse_early_term_inter_search;
+
+  // SAD based adaptive altref selection
+  int sad_based_adp_altref_lag;
+
+  // Enable/disable partition direct merging.
+  int partition_direct_merging;
+
 } REAL_TIME_SPEED_FEATURES;
 
 /*!\endcond */

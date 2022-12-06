@@ -81,7 +81,7 @@ class DatarateTestLarge
     ASSERT_NO_FATAL_FAILURE(RunLoop(&video));
     ASSERT_GE(effective_datarate_, cfg_.rc_target_bitrate * 0.85)
         << " The datarate for the file is lower than target by too much!";
-    ASSERT_LE(effective_datarate_, cfg_.rc_target_bitrate * 1.15)
+    ASSERT_LE(effective_datarate_, cfg_.rc_target_bitrate * 1.16)
         << " The datarate for the file is greater than target by too much!";
   }
 
@@ -461,12 +461,12 @@ AV1_INSTANTIATE_TEST_SUITE(DatarateTestFrameDropLarge,
 
 AV1_INSTANTIATE_TEST_SUITE(DatarateTestRealtime,
                            ::testing::Values(::libaom_test::kRealTime),
-                           ::testing::Range(7, 10), ::testing::Values(0, 3),
+                           ::testing::Range(7, 11), ::testing::Values(0, 3),
                            ::testing::Values(0, 1));
 
 AV1_INSTANTIATE_TEST_SUITE(DatarateTestFrameDropRealtime,
                            ::testing::Values(::libaom_test::kRealTime),
-                           ::testing::Range(7, 10), ::testing::Values(0, 3));
+                           ::testing::Range(7, 11), ::testing::Values(0, 3));
 
 AV1_INSTANTIATE_TEST_SUITE(DatarateTestSpeedChangeRealtime,
                            ::testing::Values(::libaom_test::kRealTime),

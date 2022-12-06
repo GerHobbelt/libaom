@@ -195,12 +195,19 @@ void av1_pick_filter_level(const YV12_BUFFER_CONFIG *sd, AV1_COMP *cpi,
   const SequenceHeader *const seq_params = cm->seq_params;
   const int num_planes = av1_num_planes(cm);
   struct loopfilter *const lf = &cm->lf;
+  int disable_filter_rt_screen = 0;
   (void)sd;
 
   lf->sharpness_level = 0;
   cpi->td.mb.rdmult = cpi->rd.RDMULT;
 
-  if (cpi->oxcf.algo_cfg.loopfilter_control == LOOPFILTER_NONE ||
+  if (cpi->oxcf.tune_cfg.content == AOM_CONTENT_SCREEN &&
+      cpi->oxcf.q_cfg.aq_mode == CYCLIC_REFRESH_AQ &&
+      cpi->sf.rt_sf.skip_lf_screen)
+    disable_filter_rt_screen = av1_cyclic_refresh_disable_lf_cdef(cpi);
+
+  if (disable_filter_rt_screen ||
+      cpi->oxcf.algo_cfg.loopfilter_control == LOOPFILTER_NONE ||
       (cpi->oxcf.algo_cfg.loopfilter_control == LOOPFILTER_REFERENCE &&
        cpi->svc.non_reference_frame)) {
     lf->filter_level[0] = 0;
@@ -262,14 +269,19 @@ void av1_pick_filter_level(const YV12_BUFFER_CONFIG *sd, AV1_COMP *cpi,
     lf->filter_level_v = clamp(filt_guess, min_filter_level, max_filter_level);
     if (cpi->oxcf.algo_cfg.loopfilter_control == LOOPFILTER_SELECTIVELY &&
         !frame_is_intra_only(cm)) {
-      const int num4x4 = (cm->width >> 2) * (cm->height >> 2);
-      const int newmv_thresh = 7;
-      const int distance_since_key_thresh = 5;
-      if ((cpi->td.rd_counts.newmv_or_intra_blocks * 100 / num4x4) <
-              newmv_thresh &&
-          cpi->rc.frames_since_key > distance_since_key_thresh) {
+      if (cpi->oxcf.tune_cfg.content == AOM_CONTENT_SCREEN) {
         lf->filter_level[0] = 0;
         lf->filter_level[1] = 0;
+      } else {
+        const int num4x4 = (cm->width >> 2) * (cm->height >> 2);
+        const int newmv_thresh = 7;
+        const int distance_since_key_thresh = 5;
+        if ((cpi->td.rd_counts.newmv_or_intra_blocks * 100 / num4x4) <
+                newmv_thresh &&
+            cpi->rc.frames_since_key > distance_since_key_thresh) {
+          lf->filter_level[0] = 0;
+          lf->filter_level[1] = 0;
+        }
       }
     }
   } else {

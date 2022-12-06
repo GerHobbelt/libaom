@@ -10,6 +10,7 @@
  */
 
 #include <assert.h>
+#include <limits.h>
 #include <math.h>
 #include <stdio.h>
 
@@ -210,6 +211,16 @@ void av1_fill_mode_rates(AV1_COMMON *const cm, ModeCosts *mode_costs,
   }
   av1_cost_tokens_from_cdf(mode_costs->intrabc_cost, fc->intrabc_cdf, NULL);
 
+  for (i = 0; i < SPATIAL_PREDICTION_PROBS; ++i) {
+    av1_cost_tokens_from_cdf(mode_costs->spatial_pred_cost[i],
+                             fc->seg.spatial_pred_seg_cdf[i], NULL);
+  }
+
+  for (i = 0; i < SEG_TEMPORAL_PRED_CTXS; ++i) {
+    av1_cost_tokens_from_cdf(mode_costs->tmp_pred_cost[i], fc->seg.pred_cdf[i],
+                             NULL);
+  }
+
   if (!frame_is_intra_only(cm)) {
     for (i = 0; i < COMP_INTER_CONTEXTS; ++i) {
       av1_cost_tokens_from_cdf(mode_costs->comp_inter_cost[i],
@@ -357,37 +368,37 @@ static const int rd_layer_depth_factor[7] = {
 // The function here is a first pass estimate based on data from
 // a previous Vizer run
 static double def_inter_rd_multiplier(int qindex) {
-  return 3.2 + (0.0035 * (double)qindex);
+  return 3.2 + (0.0015 * (double)qindex);
 }
 
 // Returns the default rd multiplier for ARF/Golden Frames for a given qindex.
 // The function here is a first pass estimate based on data from
 // a previous Vizer run
 static double def_arf_rd_multiplier(int qindex) {
-  return 3.25 + (0.0035 * (double)qindex);
+  return 3.25 + (0.0015 * (double)qindex);
 }
 
 // Returns the default rd multiplier for key frames for a given qindex.
 // The function here is a first pass estimate based on data from
 // a previous Vizer run
 static double def_kf_rd_multiplier(int qindex) {
-  return 3.3 + (0.0035 * (double)qindex);
+  return 3.3 + (0.0015 * (double)qindex);
 }
 
 int av1_compute_rd_mult_based_on_qindex(aom_bit_depth_t bit_depth,
                                         FRAME_UPDATE_TYPE update_type,
                                         int qindex) {
   const int q = av1_dc_quant_QTX(qindex, 0, bit_depth);
-  int rdmult = q * q;
+  int64_t rdmult = q * q;
   if (update_type == KF_UPDATE) {
-    double def_rd_q_mult = def_kf_rd_multiplier(qindex);
-    rdmult = (int)((double)rdmult * def_rd_q_mult);
+    double def_rd_q_mult = def_kf_rd_multiplier(q);
+    rdmult = (int64_t)((double)rdmult * def_rd_q_mult);
   } else if ((update_type == GF_UPDATE) || (update_type == ARF_UPDATE)) {
-    double def_rd_q_mult = def_arf_rd_multiplier(qindex);
-    rdmult = (int)((double)rdmult * def_rd_q_mult);
+    double def_rd_q_mult = def_arf_rd_multiplier(q);
+    rdmult = (int64_t)((double)rdmult * def_rd_q_mult);
   } else {
-    double def_rd_q_mult = def_inter_rd_multiplier(qindex);
-    rdmult = (int)((double)rdmult * def_rd_q_mult);
+    double def_rd_q_mult = def_inter_rd_multiplier(q);
+    rdmult = (int64_t)((double)rdmult * def_rd_q_mult);
   }
 
   switch (bit_depth) {
@@ -398,7 +409,7 @@ int av1_compute_rd_mult_based_on_qindex(aom_bit_depth_t bit_depth,
       assert(0 && "bit_depth should be AOM_BITS_8, AOM_BITS_10 or AOM_BITS_12");
       return -1;
   }
-  return rdmult > 0 ? rdmult : 1;
+  return rdmult > 0 ? (int)AOMMIN(rdmult, INT_MAX) : 1;
 }
 
 int av1_compute_rd_mult(const AV1_COMP *cpi, int qindex) {

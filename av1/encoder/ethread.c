@@ -49,6 +49,9 @@ static AOM_INLINE void accumulate_rd_opt(ThreadData *td, ThreadData *td_t) {
     td->rd_counts.warped_used[i] += td_t->rd_counts.warped_used[i];
   }
 
+  td->rd_counts.seg_tmp_pred_cost[0] += td_t->rd_counts.seg_tmp_pred_cost[0];
+  td->rd_counts.seg_tmp_pred_cost[1] += td_t->rd_counts.seg_tmp_pred_cost[1];
+
   td->rd_counts.newmv_or_intra_blocks += td_t->rd_counts.newmv_or_intra_blocks;
 }
 
@@ -316,18 +319,18 @@ static AOM_INLINE void switch_tile_and_get_next_job(
 
 #if CONFIG_REALTIME_ONLY
       int num_b_rows_in_tile =
-          av1_get_sb_rows_in_tile(cm, this_tile->tile_info);
+          av1_get_sb_rows_in_tile(cm, &this_tile->tile_info);
       int num_b_cols_in_tile =
-          av1_get_sb_cols_in_tile(cm, this_tile->tile_info);
+          av1_get_sb_cols_in_tile(cm, &this_tile->tile_info);
 #else
       int num_b_rows_in_tile =
           is_firstpass
-              ? av1_get_unit_rows_in_tile(this_tile->tile_info, fp_block_size)
-              : av1_get_sb_rows_in_tile(cm, this_tile->tile_info);
+              ? av1_get_unit_rows_in_tile(&this_tile->tile_info, fp_block_size)
+              : av1_get_sb_rows_in_tile(cm, &this_tile->tile_info);
       int num_b_cols_in_tile =
           is_firstpass
-              ? av1_get_unit_cols_in_tile(this_tile->tile_info, fp_block_size)
-              : av1_get_sb_cols_in_tile(cm, this_tile->tile_info);
+              ? av1_get_unit_cols_in_tile(&this_tile->tile_info, fp_block_size)
+              : av1_get_sb_cols_in_tile(cm, &this_tile->tile_info);
 #endif
       int theoretical_limit_on_threads =
           AOMMIN((num_b_cols_in_tile + 1) >> 1, num_b_rows_in_tile);
@@ -411,7 +414,7 @@ static int fp_enc_row_mt_worker_hook(void *arg1, void *unused) {
     ThreadData *td = thread_data->td;
 
     assert(current_mi_row != -1 &&
-           current_mi_row <= this_tile->tile_info.mi_row_end);
+           current_mi_row < this_tile->tile_info.mi_row_end);
 
     const int unit_height_log2 = mi_size_high_log2[fp_block_size];
     av1_first_pass_row(cpi, td, this_tile, current_mi_row >> unit_height_log2,
@@ -765,6 +768,18 @@ void av1_init_tile_thread_data(AV1_PRIMARY *ppi, int is_first_pass) {
               &ppi->error, thread_data->td->pixel_gradient_info,
               aom_malloc(sizeof(*thread_data->td->pixel_gradient_info) *
                          plane_types * MAX_SB_SQUARE));
+        }
+
+        if (is_src_var_for_4x4_sub_blocks_caching_enabled(ppi->cpi)) {
+          const BLOCK_SIZE sb_size = ppi->cpi->common.seq_params->sb_size;
+          const int mi_count_in_sb =
+              mi_size_wide[sb_size] * mi_size_high[sb_size];
+
+          AOM_CHECK_MEM_ERROR(
+              &ppi->error, thread_data->td->src_var_info_of_4x4_sub_blocks,
+              aom_malloc(
+                  sizeof(*thread_data->td->src_var_info_of_4x4_sub_blocks) *
+                  mi_count_in_sb));
         }
 
         if (ppi->cpi->sf.part_sf.partition_search_type == VAR_BASED_PARTITION) {
@@ -1257,6 +1272,8 @@ static AOM_INLINE void prepare_enc_workers(AV1_COMP *cpi, AVxWorkerHook hook,
     thread_data->td->intrabc_used = 0;
     thread_data->td->deltaq_used = 0;
     thread_data->td->abs_sum_level = 0;
+    thread_data->td->rd_counts.seg_tmp_pred_cost[0] = 0;
+    thread_data->td->rd_counts.seg_tmp_pred_cost[1] = 0;
 
     // Before encoding a frame, copy the thread data from cpi.
     if (thread_data->td != &cpi->td) {
@@ -1308,6 +1325,9 @@ static AOM_INLINE void prepare_enc_workers(AV1_COMP *cpi, AVxWorkerHook hook,
       }
       thread_data->td->mb.pixel_gradient_info =
           thread_data->td->pixel_gradient_info;
+
+      thread_data->td->mb.src_var_info_of_4x4_sub_blocks =
+          thread_data->td->src_var_info_of_4x4_sub_blocks;
 
       thread_data->td->mb.e_mbd.tmp_conv_dst = thread_data->td->mb.tmp_conv_dst;
       for (int j = 0; j < 2; ++j) {
@@ -1380,8 +1400,8 @@ static AOM_INLINE int compute_num_enc_row_mt_workers(AV1_COMMON *const cm,
   for (int row = 0; row < tile_rows; row++) {
     for (int col = 0; col < tile_cols; col++) {
       av1_tile_init(&tile_info, cm, row, col);
-      const int num_sb_rows_in_tile = av1_get_sb_rows_in_tile(cm, tile_info);
-      const int num_sb_cols_in_tile = av1_get_sb_cols_in_tile(cm, tile_info);
+      const int num_sb_rows_in_tile = av1_get_sb_rows_in_tile(cm, &tile_info);
+      const int num_sb_cols_in_tile = av1_get_sb_cols_in_tile(cm, &tile_info);
       total_num_threads_row_mt +=
           AOMMIN((num_sb_cols_in_tile + 1) >> 1, num_sb_rows_in_tile);
     }
@@ -1458,7 +1478,7 @@ static AOM_INLINE void compute_max_sb_rows_cols(AV1_COMP *cpi, int *max_sb_rows,
   for (int row = 0; row < tile_rows; row++) {
     for (int col = 0; col < tile_cols; col++) {
       const int tile_index = row * cm->tiles.cols + col;
-      TileInfo tile_info = cpi->tile_data[tile_index].tile_info;
+      const TileInfo *const tile_info = &cpi->tile_data[tile_index].tile_info;
       const int num_sb_rows_in_tile = av1_get_sb_rows_in_tile(cm, tile_info);
       const int num_sb_cols_in_tile = av1_get_sb_cols_in_tile(cm, tile_info);
       *max_sb_rows = AOMMAX(*max_sb_rows, num_sb_rows_in_tile);
@@ -1482,9 +1502,9 @@ int av1_fp_compute_num_enc_workers(AV1_COMP *cpi) {
     for (int col = 0; col < tile_cols; col++) {
       av1_tile_init(&tile_info, cm, row, col);
       const int num_mb_rows_in_tile =
-          av1_get_unit_rows_in_tile(tile_info, cpi->fp_block_size);
+          av1_get_unit_rows_in_tile(&tile_info, cpi->fp_block_size);
       const int num_mb_cols_in_tile =
-          av1_get_unit_cols_in_tile(tile_info, cpi->fp_block_size);
+          av1_get_unit_cols_in_tile(&tile_info, cpi->fp_block_size);
       total_num_threads_row_mt +=
           AOMMIN((num_mb_cols_in_tile + 1) >> 1, num_mb_rows_in_tile);
     }
@@ -1503,7 +1523,7 @@ static AOM_INLINE int fp_compute_max_mb_rows(const AV1_COMMON *const cm,
   for (int row = 0; row < tile_rows; row++) {
     for (int col = 0; col < tile_cols; col++) {
       const int tile_index = row * cm->tiles.cols + col;
-      TileInfo tile_info = tile_data[tile_index].tile_info;
+      const TileInfo *const tile_info = &tile_data[tile_index].tile_info;
       const int num_mb_rows_in_tile =
           av1_get_unit_rows_in_tile(tile_info, fp_block_size);
       max_mb_rows = AOMMAX(max_mb_rows, num_mb_rows_in_tile);

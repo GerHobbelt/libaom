@@ -437,6 +437,12 @@ typedef struct {
    * Flag to enable/disable DC block prediction.
    */
   unsigned int predict_dc_level;
+
+  /*!
+   * Whether or not we should use the quantization matrix as weights for PSNR
+   * during RD search.
+   */
+  int use_qm_dist_metric;
 } TxfmSearchParams;
 
 /*!\cond */
@@ -669,6 +675,16 @@ typedef struct {
   //! sgrproj_restore_cost
   int sgrproj_restore_cost[2];
   /**@}*/
+
+  /*****************************************************************************
+   * \name Segmentation Mode Costs
+   ****************************************************************************/
+  /**@{*/
+  //! tmp_pred_cost
+  int tmp_pred_cost[SEG_TEMPORAL_PRED_CTXS][2];
+  //! spatial_pred_cost
+  int spatial_pred_cost[SPATIAL_PREDICTION_PROBS][MAX_SEGMENTS];
+  /**@}*/
 } ModeCosts;
 
 /*! \brief Holds mv costs for encoding and motion search.
@@ -765,6 +781,12 @@ typedef struct {
   int8_t hist_bin_idx;
   bool is_dx_zero;
 } PixelLevelGradientInfo;
+
+// Structure to hold the variance and log(1 + variance) for 4x4 sub-blocks.
+typedef struct {
+  double log_var;
+  int var;
+} Block4x4VarInfo;
 
 /*!\endcond */
 
@@ -882,6 +904,9 @@ typedef struct macroblock {
    */
   int rdmult;
 
+  //! Intra only, per sb rd adjustment.
+  int intra_sb_rdmult_modifier;
+
   //! Superblock level distortion propagation factor.
   double rb;
 
@@ -942,6 +967,15 @@ typedef struct macroblock {
   /*!\brief Number of zero motion vectors
    */
   int cnt_zeromv;
+
+  /*!\brief Flag to force zeromv-skip block, for nonrd path.
+   */
+  int force_zeromv_skip;
+
+  /*! \brief Previous segment id for which qmatrices were updated.
+   * This is used to bypass setting of qmatrices if no change in qindex.
+   */
+  int prev_segment_id;
   /**@}*/
 
   /*****************************************************************************
@@ -1191,6 +1225,14 @@ typedef struct macroblock {
    * partition is evaluated in the scheme.
    */
   int try_merge_partition;
+
+  /*! \brief Pointer to buffer which caches sub-block variances in a superblock.
+   *
+   *  Pointer to the array of structures to store source variance information of
+   *  each 4x4 sub-block in a superblock. Block4x4VarInfo structure is used to
+   *  store source variance and log of source variance of each 4x4 sub-block.
+   */
+  Block4x4VarInfo *src_var_info_of_4x4_sub_blocks;
 } MACROBLOCK;
 #undef SINGLE_REF_MODES
 

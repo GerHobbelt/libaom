@@ -182,6 +182,7 @@ typedef struct {
   int high_source_sad;
   uint64_t avg_source_sad;
   uint64_t prev_avg_source_sad;
+  uint64_t frame_source_sad;
 
   int avg_frame_bandwidth;  // Average frame size target for clip
   int min_frame_bandwidth;  // Minimum allocation used for any frame
@@ -207,8 +208,8 @@ typedef struct {
   /*!\cond */
 
   // rate control history for last frame(1) and the frame before(2).
-  // -1: undershot
-  //  1: overshoot
+  // -1: overshoot
+  //  1: undershoot
   //  0: not initialized.
   int rc_1_frame;
   int rc_2_frame;
@@ -225,6 +226,9 @@ typedef struct {
   // Track amount of low motion in scene
   int avg_frame_low_motion;
 
+  // signals if number of blocks with motion is high
+  int high_num_blocks_with_motion;
+
   // For dynamic resize, 1 pass cbr.
   RESIZE_STATE resize_state;
   int resize_avg_qp;
@@ -233,8 +237,10 @@ typedef struct {
 
   // Flag to disable content related qp adjustment.
   int rtc_external_ratectrl;
-#if CONFIG_FRAME_PARALLEL_ENCODE
+
+  // Stores fast_extra_bits of the current frame.
   int frame_level_fast_extra_bits;
+#if CONFIG_FRAME_PARALLEL_ENCODE
   double frame_level_rate_correction_factors[RATE_FACTOR_LEVELS];
 #endif
   /*!\endcond */
@@ -543,8 +549,8 @@ int av1_rc_get_default_max_gf_interval(double framerate, int min_gf_interval);
 // Generally at the high level, the following flow is expected
 // to be enforced for rate control:
 // First call per frame, one of:
-//   av1_rc_get_first_pass_params()
-//   av1_rc_get_second_pass_params()
+//   av1_get_one_pass_rt_params()
+//   av1_get_second_pass_params()
 // depending on the usage to set the rate control encode parameters desired.
 //
 // Then, call encode_frame_to_data_rate() to perform the
@@ -553,7 +559,7 @@ int av1_rc_get_default_max_gf_interval(double framerate, int min_gf_interval);
 //   av1_rc_postencode_update_drop_frame()
 //
 // The majority of rate control parameters are only expected
-// to be set in the av1_rc_get_..._params() functions and
+// to be set in the av1_get_..._params() functions and
 // updated during the av1_rc_postencode_update...() functions.
 // The only exceptions are av1_rc_drop_frame() and
 // av1_rc_update_rate_correction_factors() functions.
@@ -576,16 +582,15 @@ void av1_rc_postencode_update_drop_frame(struct AV1_COMP *cpi);
  *
  * \ingroup rate_control
  * \param[in]   cpi                   Top level encoder instance structure
+ * \param[in]   is_encode_stage       Indicates if recode loop or post-encode
  * \param[in]   width                 Frame width
  * \param[in]   height                Frame height
  *
  * \return None but updates the relevant rate correction factor in cpi->rc
  */
 void av1_rc_update_rate_correction_factors(struct AV1_COMP *cpi,
-#if CONFIG_FRAME_PARALLEL_ENCODE
-                                           int is_encode_stage,
-#endif  // CONFIG_FRAME_PARALLEL_ENCODE
-                                           int width, int height);
+                                           int is_encode_stage, int width,
+                                           int height);
 /*!\cond */
 
 // Decide if we should drop this frame: For 1-pass CBR.
@@ -639,7 +644,7 @@ int av1_rc_bits_per_mb(FRAME_TYPE frame_type, int qindex,
 
 // Clamping utilities for bitrate targets for iframes and pframes.
 int av1_rc_clamp_iframe_target_size(const struct AV1_COMP *const cpi,
-                                    int target);
+                                    int64_t target);
 int av1_rc_clamp_pframe_target_size(const struct AV1_COMP *const cpi,
                                     int target, uint8_t frame_update_type);
 

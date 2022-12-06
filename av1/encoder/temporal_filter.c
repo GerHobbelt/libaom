@@ -33,6 +33,7 @@
 #include "av1/encoder/firstpass.h"
 #include "av1/encoder/gop_structure.h"
 #include "av1/encoder/mcomp.h"
+#include "av1/encoder/pass2_strategy.h"
 #include "av1/encoder/ratectrl.h"
 #include "av1/encoder/reconinter_enc.h"
 #include "av1/encoder/segmentation.h"
@@ -927,13 +928,6 @@ static void tf_do_filtering(AV1_COMP *cpi) {
   tf_restore_state(mbd, input_mb_mode_info, input_buffer, num_planes);
 }
 
-int av1_calc_arf_boost(const TWO_PASS *twopass,
-                       const TWO_PASS_FRAME *twopass_frame,
-                       const PRIMARY_RATE_CONTROL *p_rc, FRAME_INFO *frame_info,
-                       int offset, int f_frames, int b_frames,
-                       int *num_fpstats_used, int *num_fpstats_required,
-                       int project_gfu_boost);
-
 /*!\brief Setups the frame buffer for temporal filtering. This fuction
  * determines how many frames will be used for temporal filtering and then
  * groups them into a buffer. This function will also estimate the noise level
@@ -1046,6 +1040,11 @@ static void tf_setup_filtering_buffer(AV1_COMP *cpi,
 
     num_frames = AOMMIN(num_frames, gfu_boost / 150);
     num_frames += !(num_frames & 1);  // Make the number odd.
+
+    // Limit the number of frames if noise levels are low and high quantizers.
+    if (noise_levels[AOM_PLANE_Y] < 1.9 && cpi->ppi->p_rc.arf_q > 40)
+      num_frames = AOMMIN(num_frames, cpi->sf.hl_sf.num_frames_used_in_tf);
+
     // Only use 2 neighbours for the second ARF.
     if (update_type == INTNL_ARF_UPDATE) num_frames = AOMMIN(num_frames, 3);
     if (AOMMIN(max_after, max_before) >= num_frames / 2) {

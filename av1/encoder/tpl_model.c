@@ -169,9 +169,13 @@ void av1_setup_tpl_buffers(AV1_PRIMARY *const ppi,
   }
   tpl_data->tpl_frame = &tpl_data->tpl_stats_buffer[REF_FRAMES + 1];
 
-  // If lag_in_frames <= 1, TPL module is not invoked. Hence tpl recon and
-  // stats buffers are not allocated.
+  // If lag_in_frames <= 1, TPL module is not invoked. Hence dynamic memory
+  // allocations are avoided for buffers in tpl_data.
   if (lag_in_frames <= 1) return;
+
+  AOM_CHECK_MEM_ERROR(&ppi->error, tpl_data->txfm_stats_list,
+                      aom_calloc(MAX_LENGTH_TPL_FRAME_STATS,
+                                 sizeof(*tpl_data->txfm_stats_list)));
 
   for (int frame = 0; frame < lag_in_frames; ++frame) {
     AOM_CHECK_MEM_ERROR(
@@ -1346,12 +1350,9 @@ static AOM_INLINE void init_gop_frames_for_tpl(
   assert(cpi->gf_frame_index == 0);
   *pframe_qindex = 0;
 
-#if CONFIG_FRAME_PARALLEL_ENCODE
   RefFrameMapPair ref_frame_map_pairs[REF_FRAMES];
   init_ref_map_pair(cpi, ref_frame_map_pairs);
-#endif  // CONFIG_FRAME_PARALLEL_ENCODE
 
-  RefBufferStack ref_buffer_stack = cpi->ref_buffer_stack;
   int remapped_ref_idx[REF_FRAMES];
 
   EncodeFrameParams frame_params = *init_frame_params;
@@ -1425,25 +1426,17 @@ static AOM_INLINE void init_gop_frames_for_tpl(
       tpl_frame->tpl_stats_ptr = tpl_data->tpl_stats_pool[process_frame_count];
       ++process_frame_count;
     }
-#if CONFIG_FRAME_PARALLEL_ENCODE
     const int true_disp = (int)(tpl_frame->frame_display_index);
-#endif  // CONFIG_FRAME_PARALLEL_ENCODE
 
-    av1_get_ref_frames(&ref_buffer_stack,
-#if CONFIG_FRAME_PARALLEL_ENCODE
-                       ref_frame_map_pairs, true_disp,
+    av1_get_ref_frames(ref_frame_map_pairs, true_disp,
 #if CONFIG_FRAME_PARALLEL_ENCODE_2
                        cpi, gf_index, 0,
 #endif  // CONFIG_FRAME_PARALLEL_ENCODE_2
-#endif  // CONFIG_FRAME_PARALLEL_ENCODE
                        remapped_ref_idx);
 
-    int refresh_mask = av1_get_refresh_frame_flags(
-        cpi, &frame_params, frame_update_type, gf_index,
-#if CONFIG_FRAME_PARALLEL_ENCODE
-        true_disp, ref_frame_map_pairs,
-#endif  // CONFIG_FRAME_PARALLEL_ENCODE
-        &ref_buffer_stack);
+    int refresh_mask =
+        av1_get_refresh_frame_flags(cpi, &frame_params, frame_update_type,
+                                    gf_index, true_disp, ref_frame_map_pairs);
 
 #if CONFIG_FRAME_PARALLEL_ENCODE
     // Make the frames marked as is_frame_non_ref to non-reference frames.
@@ -1451,13 +1444,7 @@ static AOM_INLINE void init_gop_frames_for_tpl(
 #endif  // CONFIG_FRAME_PARALLEL_ENCODE
 
     int refresh_frame_map_index = av1_get_refresh_ref_frame_map(refresh_mask);
-#if !CONFIG_FRAME_PARALLEL_ENCODE
-    av1_update_ref_frame_map(cpi, frame_update_type,
-                             gf_group->refbuf_state[gf_index],
-                             refresh_frame_map_index, &ref_buffer_stack);
-#endif  // CONFIG_FRAME_PARALLEL_ENCODE
 
-#if CONFIG_FRAME_PARALLEL_ENCODE
     if (refresh_frame_map_index < REF_FRAMES &&
         refresh_frame_map_index != INVALID_IDX) {
       ref_frame_map_pairs[refresh_frame_map_index].disp_order =
@@ -1466,7 +1453,6 @@ static AOM_INLINE void init_gop_frames_for_tpl(
           get_true_pyr_level(gf_group->layer_depth[gf_index], true_disp,
                              cpi->ppi->gf_group.max_layer_depth);
     }
-#endif  // CONFIG_FRAME_PARALLEL_ENCODE
 
     for (int i = LAST_FRAME; i <= ALTREF_FRAME; ++i)
       tpl_frame->ref_map_index[i - LAST_FRAME] =
@@ -1516,32 +1502,28 @@ static AOM_INLINE void init_gop_frames_for_tpl(
     ++process_frame_count;
 
     gf_group->update_type[gf_index] = LF_UPDATE;
+
+#if CONFIG_BITRATE_ACCURACY && CONFIG_THREE_PASS
+    // TODO(angiebird): Find a more adaptive method to decide pframe_qindex
+    // override the pframe_qindex in the second pass when bitrate accuracy is
+    // on. We found that setting this pframe_qindex make the tpl stats more
+    // stable.
+    if (cpi->oxcf.pass == AOM_RC_SECOND_PASS) {
+      *pframe_qindex = 128;
+    }
+#endif  // CONFIG_BITRATE_ACCURACY && CONFIG_THREE_PASS
     gf_group->q_val[gf_index] = *pframe_qindex;
-#if CONFIG_FRAME_PARALLEL_ENCODE
     const int true_disp = (int)(tpl_frame->frame_display_index);
-#endif  // CONFIG_FRAME_PARALLEL_ENCODE
-    av1_get_ref_frames(&ref_buffer_stack,
-#if CONFIG_FRAME_PARALLEL_ENCODE
-                       ref_frame_map_pairs, true_disp,
+    av1_get_ref_frames(ref_frame_map_pairs, true_disp,
 #if CONFIG_FRAME_PARALLEL_ENCODE_2
                        cpi, gf_index, 0,
-#endif  // CONFIG_FRAME_PARALLEL_ENCODE_2
-#endif  // CONFIG_FRAME_PARALLEL_ENCODE
+#endif
                        remapped_ref_idx);
-    int refresh_mask = av1_get_refresh_frame_flags(
-        cpi, &frame_params, frame_update_type, gf_index,
-#if CONFIG_FRAME_PARALLEL_ENCODE
-        true_disp, ref_frame_map_pairs,
-#endif  // CONFIG_FRAME_PARALLEL_ENCODE
-        &ref_buffer_stack);
+    int refresh_mask =
+        av1_get_refresh_frame_flags(cpi, &frame_params, frame_update_type,
+                                    gf_index, true_disp, ref_frame_map_pairs);
     int refresh_frame_map_index = av1_get_refresh_ref_frame_map(refresh_mask);
-#if !CONFIG_FRAME_PARALLEL_ENCODE
-    av1_update_ref_frame_map(cpi, frame_update_type,
-                             gf_group->refbuf_state[gf_index],
-                             refresh_frame_map_index, &ref_buffer_stack);
-#endif  // CONFIG_FRAME_PARALLEL_ENCODE
 
-#if CONFIG_FRAME_PARALLEL_ENCODE
     if (refresh_frame_map_index < REF_FRAMES &&
         refresh_frame_map_index != INVALID_IDX) {
       ref_frame_map_pairs[refresh_frame_map_index].disp_order =
@@ -1550,7 +1532,6 @@ static AOM_INLINE void init_gop_frames_for_tpl(
           get_true_pyr_level(gf_group->layer_depth[gf_index], true_disp,
                              cpi->ppi->gf_group.max_layer_depth);
     }
-#endif  // CONFIG_FRAME_PARALLEL_ENCODE
 
     for (int i = LAST_FRAME; i <= ALTREF_FRAME; ++i)
       tpl_frame->ref_map_index[i - LAST_FRAME] =
@@ -1817,7 +1798,7 @@ void av1_tpl_rdmult_setup(AV1_COMP *cpi) {
       }
       const double rk = intra_cost / mc_dep_cost;
       const int index = row * num_cols + col;
-      cpi->ppi->tpl_rdmult_scaling_factors[index] = rk / cpi->rd.r0 + c;
+      cpi->tpl_rdmult_scaling_factors[index] = rk / cpi->rd.r0 + c;
     }
   }
 }
@@ -1859,7 +1840,7 @@ void av1_tpl_rdmult_setup_sb(AV1_COMP *cpi, MACROBLOCK *const x,
     for (col = mi_col_sr / num_mi_h;
          col < num_cols && col < mi_col_sr / num_mi_h + num_bcols; ++col) {
       const int index = row * num_cols + col;
-      log_sum += log(cpi->ppi->tpl_rdmult_scaling_factors[index]);
+      log_sum += log(cpi->tpl_rdmult_scaling_factors[index]);
       base_block_count += 1.0;
     }
   }
@@ -1881,7 +1862,7 @@ void av1_tpl_rdmult_setup_sb(AV1_COMP *cpi, MACROBLOCK *const x,
          col < num_cols && col < mi_col_sr / num_mi_h + num_bcols; ++col) {
       const int index = row * num_cols + col;
       cpi->ppi->tpl_sb_rdmult_scaling_factors[index] =
-          scale_adj * cpi->ppi->tpl_rdmult_scaling_factors[index];
+          scale_adj * cpi->tpl_rdmult_scaling_factors[index];
     }
   }
 }
@@ -2017,7 +1998,7 @@ int av1_get_q_index_from_qstep_ratio(int leaf_qindex, double qstep_ratio,
   int qindex = leaf_qindex;
   for (qindex = leaf_qindex; qindex > 0; --qindex) {
     const double qstep = av1_dc_quant_QTX(qindex, 0, bit_depth);
-    if (qstep + 0.1 <= target_qstep) break;
+    if (qstep <= target_qstep) break;
   }
   return qindex;
 }
@@ -2031,6 +2012,8 @@ int av1_tpl_get_q_index(const TplParams *tpl_data, int gf_frame_index,
 #if CONFIG_BITRATE_ACCURACY
 void av1_vbr_rc_init(VBR_RATECTRL_INFO *vbr_rc_info, double total_bit_budget,
                      int show_frame_count) {
+  av1_zero(*vbr_rc_info);
+  vbr_rc_info->ready = 0;
   vbr_rc_info->total_bit_budget = total_bit_budget;
   vbr_rc_info->show_frame_count = show_frame_count;
   const double scale_factors[FRAME_UPDATE_TYPES] = { 0.94559, 0.94559, 1,
@@ -2051,7 +2034,50 @@ void av1_vbr_rc_init(VBR_RATECTRL_INFO *vbr_rc_info, double total_bit_budget,
          sizeof(mv_scale_factors[0]) * FRAME_UPDATE_TYPES);
 
   vbr_rc_reset_gop_data(vbr_rc_info);
+#if CONFIG_THREE_PASS
+  // TODO(angiebird): Explain why we use -1 here
+  vbr_rc_info->cur_gop_idx = -1;
+  vbr_rc_info->gop_count = 0;
+  vbr_rc_info->total_frame_count = 0;
+#endif  // CONFIG_THREE_PASS
 }
+
+#if CONFIG_THREE_PASS
+int av1_vbr_rc_frame_coding_idx(const VBR_RATECTRL_INFO *vbr_rc_info,
+                                int gf_frame_index) {
+  int gop_idx = vbr_rc_info->cur_gop_idx;
+  int gop_start_idx = vbr_rc_info->gop_start_idx_list[gop_idx];
+  return gop_start_idx + gf_frame_index;
+}
+
+void av1_vbr_rc_append_tpl_info(VBR_RATECTRL_INFO *vbr_rc_info,
+                                const TPL_INFO *tpl_info) {
+  int gop_start_idx = vbr_rc_info->total_frame_count;
+  vbr_rc_info->gop_start_idx_list[vbr_rc_info->gop_count] = gop_start_idx;
+  vbr_rc_info->gop_length_list[vbr_rc_info->gop_count] = tpl_info->gf_length;
+  assert(gop_start_idx + tpl_info->gf_length <= VBR_RC_INFO_MAX_FRAMES);
+  for (int i = 0; i < tpl_info->gf_length; ++i) {
+    vbr_rc_info->txfm_stats_list[gop_start_idx + i] =
+        tpl_info->txfm_stats_list[i];
+    vbr_rc_info->qstep_ratio_list[gop_start_idx + i] =
+        tpl_info->qstep_ratio_ls[i];
+    // TODO(angiebird): This is a temporary solution. We currently apply same
+    // scale factor for each update_type, therefore setting everything to
+    // ARF_UPDATE is temporarily okay. Properly set the update_type later.
+    vbr_rc_info->update_type_list[gop_start_idx + i] = ARF_UPDATE;
+  }
+  vbr_rc_info->total_frame_count += tpl_info->gf_length;
+  vbr_rc_info->gop_count++;
+}
+
+#if CONFIG_RATECTRL_LOG
+void av1_rc_frame_log(int gf_frame_index, FRAME_UPDATE_TYPE update_type, int q,
+                      double qstep_ratio) {
+  printf("gf_frame_index %d update_type %d q %d qstep_ratio %f\n",
+         gf_frame_index, update_type, q, qstep_ratio);
+}
+#endif  //  CONFIG_RATECTRL_LOG
+#endif  // CONFIG_THREE_PASS
 
 void av1_vbr_rc_set_gop_bit_budget(VBR_RATECTRL_INFO *vbr_rc_info,
                                    int gop_showframe_count) {
@@ -2079,7 +2105,6 @@ double av1_vbr_rc_info_estimate_gop_bitrate(
     double *estimated_bitrate_byframe) {
   compute_q_indices(base_q_index, frame_count, qstep_ratio_list, bit_depth,
                     q_index_list);
-  double gop_bitrate = 0;
   for (int frame_index = 0; frame_index < frame_count; frame_index++) {
     const TplTxfmStats *frame_stats = &stats_list[frame_index];
     if (frame_stats->ready) {
@@ -2088,8 +2113,6 @@ double av1_vbr_rc_info_estimate_gop_bitrate(
       double frame_bitrate = av1_laplace_estimate_frame_rate(
           q_index, frame_stats->txfm_block_count, frame_stats->abs_coeff_mean,
           frame_stats->coeff_num);
-      gop_bitrate += frame_bitrate;
-
       estimated_bitrate_byframe[frame_index] = frame_bitrate;
     } else {
       estimated_bitrate_byframe[frame_index] = 0;

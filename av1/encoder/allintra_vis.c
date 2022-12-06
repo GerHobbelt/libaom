@@ -273,7 +273,7 @@ static BLOCK_SIZE pick_block_size(AV1_COMP *cpi,
       for (int i = 0; i < 4; ++i) {
         max_split_mean = AOMMAX(max_split_mean, split_mean[i]);
         max_split_var = AOMMAX(max_split_var, split_var[i]);
-        geo_split_var += log(split_var[i]);
+        geo_split_var += log(0.1 + split_var[i]);
       }
       geo_split_var = exp(geo_split_var / 4);
       const double param_1 = 1.5;
@@ -628,7 +628,8 @@ void av1_init_mb_ur_var_buffer(AV1_COMP *cpi) {
 
 #if CONFIG_TFLITE
 static int model_predict(BLOCK_SIZE block_size, int num_cols, int num_rows,
-                         uint8_t *y_buffer, int y_stride, float *predicts) {
+                         int bit_depth, uint8_t *y_buffer, int y_stride,
+                         float *predicts0, float *predicts1) {
   // Create the model and interpreter options.
   TfLiteModel *model =
       TfLiteModelCreate(av1_deltaq4_model_file, av1_deltaq4_model_fsize);
@@ -659,10 +660,14 @@ static int model_predict(BLOCK_SIZE block_size, int num_cols, int num_rows,
     return 1;
   }
 
-  struct aom_internal_error_info error;
   size_t input_size = TfLiteTensorByteSize(input_tensor);
-  float *input_data;
-  AOM_CHECK_MEM_ERROR(&error, input_data, aom_calloc(input_size, 1));
+  float *input_data = aom_calloc(input_size, 1);
+  if (input_data == NULL) {
+    TfLiteInterpreterDelete(interpreter);
+    TfLiteInterpreterOptionsDelete(options);
+    TfLiteModelDelete(model);
+    return 1;
+  }
 
   const int num_mi_w = mi_size_wide[block_size];
   const int num_mi_h = mi_size_high[block_size];
@@ -673,9 +678,12 @@ static int model_predict(BLOCK_SIZE block_size, int num_cols, int num_rows,
 
       uint8_t *buf = y_buffer + row_offset * y_stride + col_offset;
       int r = row_offset, pos = 0;
+      const float base = (float)((1 << bit_depth) - 1);
       while (r < row_offset + (num_mi_h << 2)) {
         for (int c = 0; c < (num_mi_w << 2); ++c) {
-          input_data[pos++] = (float)*(buf + c) / 255.0f;
+          input_data[pos++] = bit_depth > 8
+                                  ? (float)*CONVERT_TO_SHORTPTR(buf + c) / base
+                                  : (float)*(buf + c) / base;
         }
         buf += y_stride;
         ++r;
@@ -701,10 +709,11 @@ static int model_predict(BLOCK_SIZE block_size, int num_cols, int num_rows,
       }
 
       size_t output_size = TfLiteTensorByteSize(output_tensor);
-      float output_data;
+      float output_data[2];
 
-      TfLiteTensorCopyToBuffer(output_tensor, &output_data, output_size);
-      predicts[row * num_cols + col] = output_data;
+      TfLiteTensorCopyToBuffer(output_tensor, output_data, output_size);
+      predicts0[row * num_cols + col] = output_data[0];
+      predicts1[row * num_cols + col] = output_data[1];
     }
   }
 
@@ -722,23 +731,22 @@ void av1_set_mb_ur_variance(AV1_COMP *cpi) {
   uint8_t *y_buffer = cpi->source->y_buffer;
   const int y_stride = cpi->source->y_stride;
   const int block_size = cpi->common.seq_params->sb_size;
+  const uint32_t bit_depth = cpi->td.mb.e_mbd.bd;
 
   const int num_mi_w = mi_size_wide[block_size];
   const int num_mi_h = mi_size_high[block_size];
   const int num_cols = (mi_params->mi_cols + num_mi_w - 1) / num_mi_w;
   const int num_rows = (mi_params->mi_rows + num_mi_h - 1) / num_mi_h;
-  const int use_hbd = cpi->source->flags & YV12_FLAG_HIGHBITDEPTH;
 
-  // TODO(sdeng): add highbitdepth support.
-  (void)use_hbd;
-
-  float *mb_delta_q, delta_q_avg = 0.0f;
-  CHECK_MEM_ERROR(cm, mb_delta_q,
+  // TODO(sdeng): fit a better model_1; disable it at this time.
+  float *mb_delta_q0, *mb_delta_q1, delta_q_avg0 = 0.0f;
+  CHECK_MEM_ERROR(cm, mb_delta_q0,
+                  aom_calloc(num_rows * num_cols, sizeof(float)));
+  CHECK_MEM_ERROR(cm, mb_delta_q1,
                   aom_calloc(num_rows * num_cols, sizeof(float)));
 
-  // TODO(sdeng): train the model at a different quality level.
-  if (model_predict(block_size, num_cols, num_rows, y_buffer, y_stride,
-                    mb_delta_q)) {
+  if (model_predict(block_size, num_cols, num_rows, bit_depth, y_buffer,
+                    y_stride, mb_delta_q0, mb_delta_q1)) {
     aom_internal_error(cm->error, AOM_CODEC_ERROR,
                        "Failed to call TFlite functions.");
   }
@@ -747,38 +755,33 @@ void av1_set_mb_ur_variance(AV1_COMP *cpi) {
   for (int row = 0; row < num_rows; ++row) {
     for (int col = 0; col < num_cols; ++col) {
       const int index = row * num_cols + col;
-      delta_q_avg += mb_delta_q[index];
+      delta_q_avg0 += mb_delta_q0[index];
     }
   }
 
-  delta_q_avg /= (float)(num_rows * num_cols);
-
-  // Approximates the model change between current version (Spet 2021) and the
-  // baseline (July 2021).
-  const float model_change = 3.0f * 4.0f / (float)MAXQ;
-  delta_q_avg += model_change;
+  delta_q_avg0 /= (float)(num_rows * num_cols);
 
   float scaling_factor;
   const float cq_level = (float)cpi->oxcf.rc_cfg.cq_level / (float)MAXQ;
-  if (cq_level < delta_q_avg) {
-    scaling_factor = cq_level / delta_q_avg;
+  if (cq_level < delta_q_avg0) {
+    scaling_factor = cq_level / delta_q_avg0;
   } else {
-    scaling_factor = 1.0f - (cq_level - delta_q_avg) / (1.0f - delta_q_avg);
+    scaling_factor = 1.0f - (cq_level - delta_q_avg0) / (1.0f - delta_q_avg0);
   }
-  delta_q_avg -= model_change;
 
   for (int row = 0; row < num_rows; ++row) {
     for (int col = 0; col < num_cols; ++col) {
       const int index = row * num_cols + col;
       cpi->mb_delta_q[index] =
-          RINT((float)cpi->oxcf.q_cfg.deltaq_strength / 100.0 * (float)MAXQ *
-               scaling_factor * (mb_delta_q[index] - delta_q_avg));
+          RINT((float)cpi->oxcf.q_cfg.deltaq_strength / 100.0f * (float)MAXQ *
+               scaling_factor * (mb_delta_q0[index] - delta_q_avg0));
     }
   }
 
-  aom_free(mb_delta_q);
+  aom_free(mb_delta_q0);
+  aom_free(mb_delta_q1);
 }
-#else   // !CONFIG_TFLITE
+#else  // !CONFIG_TFLITE
 void av1_set_mb_ur_variance(AV1_COMP *cpi) {
   const AV1_COMMON *cm = &cpi->common;
   const CommonModeInfoParams *const mi_params = &cm->mi_params;
@@ -892,7 +895,7 @@ void av1_set_mb_ur_variance(AV1_COMP *cpi) {
   aom_free(mb_delta_q[0]);
   aom_free(mb_delta_q[1]);
 }
-#endif  // CONFIG_TFLITE
+#endif
 
 int av1_get_sbq_user_rating_based(AV1_COMP *const cpi, int mi_row, int mi_col) {
   const BLOCK_SIZE bsize = cpi->common.seq_params->sb_size;
