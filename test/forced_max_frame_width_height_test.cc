@@ -19,6 +19,7 @@
 
 #include "aom/aomcx.h"
 #include "aom/aom_encoder.h"
+#include "config/aom_config.h"
 #include "third_party/googletest/src/googletest/include/gtest/gtest.h"
 
 namespace {
@@ -72,19 +73,19 @@ void RunTest(unsigned int usage, unsigned int lag_in_frames,
 
 #if !CONFIG_REALTIME_ONLY
 
-TEST(EncodeForcedMaxFrameWidthHeight, DISABLED_GoodQualityLag0TunePSNR) {
+TEST(EncodeForcedMaxFrameWidthHeight, GoodQualityLag0TunePSNR) {
   RunTest(AOM_USAGE_GOOD_QUALITY, /*lag_in_frames=*/0, "psnr");
 }
 
-TEST(EncodeForcedMaxFrameWidthHeight, DISABLED_GoodQualityLag0TuneSSIM) {
+TEST(EncodeForcedMaxFrameWidthHeight, GoodQualityLag0TuneSSIM) {
   RunTest(AOM_USAGE_GOOD_QUALITY, /*lag_in_frames=*/0, "ssim");
 }
 
-TEST(EncodeForcedMaxFrameWidthHeight, DISABLED_GoodQualityLag1TunePSNR) {
+TEST(EncodeForcedMaxFrameWidthHeight, GoodQualityLag1TunePSNR) {
   RunTest(AOM_USAGE_GOOD_QUALITY, /*lag_in_frames=*/1, "psnr");
 }
 
-TEST(EncodeForcedMaxFrameWidthHeight, DISABLED_GoodQualityLag1TuneSSIM) {
+TEST(EncodeForcedMaxFrameWidthHeight, GoodQualityLag1TuneSSIM) {
   RunTest(AOM_USAGE_GOOD_QUALITY, /*lag_in_frames=*/1, "ssim");
 }
 

@@ -10,6 +10,7 @@
 #
 
 list(APPEND AOM_TEST_DATA_FILE_NAMES
+            "desktopqvga2.320_240.yuv"
             "desktop1.320_180.yuv"
             "hantro_collage_w176h144.yuv"
             "hantro_collage_w352h288.yuv"
@@ -551,7 +552,7 @@ if(CONFIG_AV1_DECODER)
               "invalid-oss-fuzz-10705.ivf"
               "invalid-oss-fuzz-10705.ivf.res"
               "invalid-oss-fuzz-10723.ivf"
-              "invalid-oss-fuzz-10723.ivf.res.2"
+              "invalid-oss-fuzz-10723.ivf.res.3"
               "invalid-oss-fuzz-10779.ivf"
               "invalid-oss-fuzz-10779.ivf.res"
               "invalid-oss-fuzz-11477.ivf"

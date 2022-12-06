@@ -1046,6 +1046,7 @@ typedef struct INTERP_FILTER_SPEED_FEATURES {
   // dual_filter=0 case
   int skip_sharp_interp_filter_search;
 
+  // skip interpolation filter search for a block in chessboard pattern
   int cb_pred_filter_search;
 
   // adaptive interp_filter search to allow skip of certain filter types.
@@ -1480,8 +1481,8 @@ typedef struct REAL_TIME_SPEED_FEATURES {
   // separately, for nonrd pickmode.
   int intra_y_mode_bsize_mask_nrd[BLOCK_SIZES];
 
-  // Skips mode checks more agressively in nonRD mode
-  int nonrd_agressive_skip;
+  // Skips mode checks more aggressively in nonRD mode
+  int nonrd_aggressive_skip;
 
   // Skip cdef on 64x64 blocks when NEWMV or INTRA is not picked or color
   // sensitivity is off. When color sensitivity is on for a superblock, all
@@ -1643,8 +1644,9 @@ typedef struct REAL_TIME_SPEED_FEATURES {
   // 2: If source sad <= kVeryLowSad
   int set_zeromv_skip_based_on_source_sad;
 
-  // Downgrades the subpel search to av1_find_best_sub_pixel_tree_pruned_more
-  // when either the fullpel search performed well, or when zeromv has low sad.
+  // Downgrades the block-level subpel motion search to
+  // av1_find_best_sub_pixel_tree_pruned_more for higher QP and when fullpel
+  // search performed well, zeromv has low sad or low source_var
   bool use_adaptive_subpel_search;
 
   // A flag used in RTC case to control frame_refs_short_signaling. Note that
@@ -1652,6 +1654,10 @@ typedef struct REAL_TIME_SPEED_FEATURES {
   // can only be turned on when res < 360p and speed >= 9, in which case only
   // LAST and GOLDEN ref frames are used now.
   bool enable_ref_short_signaling;
+
+  // A flag that controls if we check or bypass GLOBALMV in rtc single ref frame
+  // case.
+  bool check_globalmv_on_single_ref;
 } REAL_TIME_SPEED_FEATURES;
 
 /*!\endcond */

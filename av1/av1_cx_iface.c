@@ -172,6 +172,9 @@ struct av1_extracfg {
   int fwd_kf_dist;
 
   LOOPFILTER_CONTROL loopfilter_control;
+  // Indicates if the application of post-processing filters should be skipped
+  // on reconstructed frame.
+  unsigned int skip_postproc_filtering;
   // the name of the second pass output file when passes > 2
   const char *two_pass_output;
   const char *second_pass_log;
@@ -189,6 +192,7 @@ struct av1_extracfg {
   int auto_intra_tools_off;
   int strict_level_conformance;
   int kf_max_pyr_height;
+  int sb_qp_sweep;
 };
 
 #if CONFIG_REALTIME_ONLY
@@ -345,11 +349,13 @@ static const struct av1_extracfg default_extra_cfg = {
   -1,              // passes
   -1,              // fwd_kf_dist
   LOOPFILTER_ALL,  // loopfilter_control
+  0,               // skip_postproc_filtering
   NULL,            // two_pass_output
   NULL,            // second_pass_log
   0,               // auto_intra_tools_off
   0,               // strict_level_conformance
   -1,              // kf_max_pyr_height
+  0,               // sb_qp_sweep
 };
 #else
 static const struct av1_extracfg default_extra_cfg = {
@@ -492,11 +498,13 @@ static const struct av1_extracfg default_extra_cfg = {
   -1,              // passes
   -1,              // fwd_kf_dist
   LOOPFILTER_ALL,  // loopfilter_control
+  0,               // skip_postproc_filtering
   NULL,            // two_pass_output
   NULL,            // second_pass_log
   0,               // auto_intra_tools_off
   0,               // strict_level_conformance
   -1,              // kf_max_pyr_height
+  0,               // sb_qp_sweep
 };
 #endif
 
@@ -840,16 +848,19 @@ static aom_codec_err_t validate_config(aom_codec_alg_priv_t *ctx,
 
   for (int i = 0; i < MAX_NUM_OPERATING_POINTS; ++i) {
     const int level_idx = extra_cfg->target_seq_level_idx[i];
-    if (!is_valid_seq_level_idx(level_idx) && level_idx != SEQ_LEVELS) {
+    if (!is_valid_seq_level_idx(level_idx) &&
+        level_idx != SEQ_LEVEL_KEEP_STATS) {
       ERROR("Target sequence level index is invalid");
     }
   }
 
   RANGE_CHECK(extra_cfg, deltaq_strength, 0, 1000);
   RANGE_CHECK_HI(extra_cfg, loopfilter_control, 3);
+  RANGE_CHECK_BOOL(extra_cfg, skip_postproc_filtering);
   RANGE_CHECK_HI(extra_cfg, enable_cdef, 2);
   RANGE_CHECK_BOOL(extra_cfg, auto_intra_tools_off);
   RANGE_CHECK_BOOL(extra_cfg, strict_level_conformance);
+  RANGE_CHECK_BOOL(extra_cfg, sb_qp_sweep);
 
   RANGE_CHECK(extra_cfg, kf_max_pyr_height, -1, 5);
   if (extra_cfg->kf_max_pyr_height != -1 &&
@@ -1200,6 +1211,7 @@ static aom_codec_err_t set_encoder_config(AV1EncoderConfig *oxcf,
   algo_cfg->enable_tpl_model =
       resize_cfg->resize_mode ? 0 : extra_cfg->enable_tpl_model;
   algo_cfg->loopfilter_control = extra_cfg->loopfilter_control;
+  algo_cfg->skip_postproc_filtering = extra_cfg->skip_postproc_filtering;
 
   // Set two-pass stats configuration.
   oxcf->twopass_stats_in = cfg->rc_twopass_stats_in;
@@ -1227,6 +1239,12 @@ static aom_codec_err_t set_encoder_config(AV1EncoderConfig *oxcf,
   kf_cfg->enable_intrabc = extra_cfg->enable_intrabc;
 
   oxcf->speed = extra_cfg->cpu_used;
+  // TODO(yunqingwang, any) In REALTIME mode, 1080p performance at speed 5 & 6
+  // is quite bad. Force to use speed 7 for now. Will investigate it when we
+  // work on rd path optimization later.
+  if (oxcf->mode == REALTIME && AOMMIN(cfg->g_w, cfg->g_h) >= 1080 &&
+      oxcf->speed < 7)
+    oxcf->speed = 7;
 
   // Set Color related configuration.
   color_cfg->color_primaries = extra_cfg->color_primaries;
@@ -1437,6 +1455,8 @@ static aom_codec_err_t set_encoder_config(AV1EncoderConfig *oxcf,
   oxcf->strict_level_conformance = extra_cfg->strict_level_conformance;
 
   oxcf->kf_max_pyr_height = extra_cfg->kf_max_pyr_height;
+
+  oxcf->sb_qp_sweep = extra_cfg->sb_qp_sweep;
 
   return AOM_CODEC_OK;
 }
@@ -2420,6 +2440,13 @@ static aom_codec_err_t ctrl_enable_sb_multipass_unit_test(
   return update_extra_cfg(ctx, &extra_cfg);
 }
 
+static aom_codec_err_t ctrl_enable_sb_qp_sweep(aom_codec_alg_priv_t *ctx,
+                                               va_list args) {
+  struct av1_extracfg extra_cfg = ctx->extra_cfg;
+  extra_cfg.sb_qp_sweep = CAST(AV1E_ENABLE_SB_QP_SWEEP, args);
+  return update_extra_cfg(ctx, &extra_cfg);
+}
+
 static aom_codec_err_t ctrl_set_external_partition(aom_codec_alg_priv_t *ctx,
                                                    va_list args) {
   AV1_COMP *const cpi = ctx->ppi->cpi;
@@ -2436,6 +2463,17 @@ static aom_codec_err_t ctrl_set_loopfilter_control(aom_codec_alg_priv_t *ctx,
                                                    va_list args) {
   struct av1_extracfg extra_cfg = ctx->extra_cfg;
   extra_cfg.loopfilter_control = CAST(AV1E_SET_LOOPFILTER_CONTROL, args);
+  return update_extra_cfg(ctx, &extra_cfg);
+}
+
+static aom_codec_err_t ctrl_set_skip_postproc_filtering(
+    aom_codec_alg_priv_t *ctx, va_list args) {
+  // Skipping the application of post-processing filters is allowed only
+  // for ALLINTRA mode.
+  if (ctx->cfg.g_usage != AOM_USAGE_ALL_INTRA) return AOM_CODEC_INCAPABLE;
+  struct av1_extracfg extra_cfg = ctx->extra_cfg;
+  extra_cfg.skip_postproc_filtering =
+      CAST(AV1E_SET_SKIP_POSTPROC_FILTERING, args);
   return update_extra_cfg(ctx, &extra_cfg);
 }
 
@@ -3200,6 +3238,8 @@ static aom_codec_err_t ctrl_set_reference(aom_codec_alg_priv_t *ctx,
 
 static aom_codec_err_t ctrl_copy_reference(aom_codec_alg_priv_t *ctx,
                                            va_list args) {
+  if (ctx->ppi->cpi->oxcf.algo_cfg.skip_postproc_filtering)
+    return AOM_CODEC_INCAPABLE;
   av1_ref_frame_t *const frame = va_arg(args, av1_ref_frame_t *);
 
   if (frame != NULL) {
@@ -3215,6 +3255,8 @@ static aom_codec_err_t ctrl_copy_reference(aom_codec_alg_priv_t *ctx,
 
 static aom_codec_err_t ctrl_get_reference(aom_codec_alg_priv_t *ctx,
                                           va_list args) {
+  if (ctx->ppi->cpi->oxcf.algo_cfg.skip_postproc_filtering)
+    return AOM_CODEC_INCAPABLE;
   av1_ref_frame_t *const frame = va_arg(args, av1_ref_frame_t *);
 
   if (frame != NULL) {
@@ -3419,13 +3461,13 @@ static aom_codec_err_t ctrl_set_svc_ref_frame_config(aom_codec_alg_priv_t *ctx,
   AV1_COMP *const cpi = ctx->ppi->cpi;
   aom_svc_ref_frame_config_t *const data =
       va_arg(args, aom_svc_ref_frame_config_t *);
-  cpi->rtc_ref.set_ref_frame_config = 1;
+  cpi->ppi->rtc_ref.set_ref_frame_config = 1;
   for (unsigned int i = 0; i < INTER_REFS_PER_FRAME; ++i) {
-    cpi->rtc_ref.reference[i] = data->reference[i];
-    cpi->rtc_ref.ref_idx[i] = data->ref_idx[i];
+    cpi->ppi->rtc_ref.reference[i] = data->reference[i];
+    cpi->ppi->rtc_ref.ref_idx[i] = data->ref_idx[i];
   }
   for (unsigned int i = 0; i < REF_FRAMES; ++i)
-    cpi->rtc_ref.refresh[i] = data->refresh[i];
+    cpi->ppi->rtc_ref.refresh[i] = data->refresh[i];
   cpi->svc.use_flexible_mode = 1;
   cpi->svc.ksvc_fixed_mode = 0;
   return AOM_CODEC_OK;
@@ -3436,9 +3478,9 @@ static aom_codec_err_t ctrl_set_svc_ref_frame_comp_pred(
   AV1_COMP *const cpi = ctx->ppi->cpi;
   aom_svc_ref_frame_comp_pred_t *const data =
       va_arg(args, aom_svc_ref_frame_comp_pred_t *);
-  cpi->rtc_ref.ref_frame_comp[0] = data->use_comp_pred[0];
-  cpi->rtc_ref.ref_frame_comp[1] = data->use_comp_pred[1];
-  cpi->rtc_ref.ref_frame_comp[2] = data->use_comp_pred[2];
+  cpi->ppi->rtc_ref.ref_frame_comp[0] = data->use_comp_pred[0];
+  cpi->ppi->rtc_ref.ref_frame_comp[1] = data->use_comp_pred[1];
+  cpi->ppi->rtc_ref.ref_frame_comp[2] = data->use_comp_pred[2];
   return AOM_CODEC_OK;
 }
 
@@ -3945,6 +3987,9 @@ static aom_codec_err_t encoder_set_option(aom_codec_alg_priv_t *ctx,
                               &g_av1_codec_arg_defs.strict_level_conformance,
                               argv, err_string)) {
     extra_cfg.strict_level_conformance = arg_parse_int_helper(&arg, err_string);
+  } else if (arg_match_helper(&arg, &g_av1_codec_arg_defs.sb_qp_sweep, argv,
+                              err_string)) {
+    extra_cfg.sb_qp_sweep = arg_parse_int_helper(&arg, err_string);
   } else if (arg_match_helper(&arg, &g_av1_codec_arg_defs.kf_max_pyr_height,
                               argv, err_string)) {
     extra_cfg.kf_max_pyr_height = arg_parse_int_helper(&arg, err_string);
@@ -4137,10 +4182,12 @@ static aom_codec_ctrl_fn_map_t encoder_ctrl_maps[] = {
   { AV1E_SET_SVC_REF_FRAME_COMP_PRED, ctrl_set_svc_ref_frame_comp_pred },
   { AV1E_SET_VBR_CORPUS_COMPLEXITY_LAP, ctrl_set_vbr_corpus_complexity_lap },
   { AV1E_ENABLE_SB_MULTIPASS_UNIT_TEST, ctrl_enable_sb_multipass_unit_test },
+  { AV1E_ENABLE_SB_QP_SWEEP, ctrl_enable_sb_qp_sweep },
   { AV1E_SET_DV_COST_UPD_FREQ, ctrl_set_dv_cost_upd_freq },
   { AV1E_SET_EXTERNAL_PARTITION, ctrl_set_external_partition },
   { AV1E_SET_ENABLE_TX_SIZE_SEARCH, ctrl_set_enable_tx_size_search },
   { AV1E_SET_LOOPFILTER_CONTROL, ctrl_set_loopfilter_control },
+  { AV1E_SET_SKIP_POSTPROC_FILTERING, ctrl_set_skip_postproc_filtering },
   { AV1E_SET_AUTO_INTRA_TOOLS_OFF, ctrl_set_auto_intra_tools_off },
   { AV1E_SET_RTC_EXTERNAL_RC, ctrl_set_rtc_external_rc },
 

@@ -194,7 +194,8 @@ static int choose_primary_ref_frame(
   // frame bit allocation.
   if (cm->tiles.large_scale) return (LAST_FRAME - LAST_FRAME);
 
-  if (cpi->ppi->use_svc) return av1_svc_primary_ref_frame(cpi);
+  if (cpi->ppi->use_svc || cpi->ppi->rtc_ref.set_ref_frame_config)
+    return av1_svc_primary_ref_frame(cpi);
 
   // Find the most recent reference frame with the same reference type as the
   // current frame
@@ -615,7 +616,7 @@ int av1_get_refresh_frame_flags(
   // flags to 0 to keep things consistent.
   if (frame_params->show_existing_frame) return 0;
 
-  const RTC_REF *const rtc_ref = &cpi->rtc_ref;
+  const RTC_REF *const rtc_ref = &cpi->ppi->rtc_ref;
   if (is_frame_droppable(rtc_ref, ext_refresh_frame_flags)) return 0;
 
 #if !CONFIG_REALTIME_ONLY
@@ -1386,7 +1387,10 @@ int av1_encode_strategy(AV1_COMP *const cpi, size_t *const size,
 
   // Source may be changed if temporal filtered later.
   frame_input.source = &source->img;
-  frame_input.last_source = last_source != NULL ? &last_source->img : NULL;
+  if (cpi->ppi->use_svc && last_source != NULL)
+    av1_svc_set_last_source(cpi, &frame_input, &last_source->img);
+  else
+    frame_input.last_source = last_source != NULL ? &last_source->img : NULL;
   frame_input.ts_duration = source->ts_end - source->ts_start;
   // Save unfiltered source. It is used in av1_get_second_pass_params().
   cpi->unfiltered_source = frame_input.source;
@@ -1463,11 +1467,13 @@ int av1_encode_strategy(AV1_COMP *const cpi, size_t *const size,
   // this parameter should be used with caution.
   frame_params.speed = oxcf->speed;
 
-  // Work out some encoding parameters specific to the pass:
-  if (has_no_stats_stage(cpi) && oxcf->q_cfg.aq_mode == CYCLIC_REFRESH_AQ) {
-    av1_cyclic_refresh_update_parameters(cpi);
-  } else if (is_stat_generation_stage(cpi)) {
-    cpi->td.mb.e_mbd.lossless[0] = is_lossless_requested(&oxcf->rc_cfg);
+#if !CONFIG_REALTIME_ONLY
+  // Set forced key frames when necessary. For two-pass encoding / lap mode,
+  // this is already handled by av1_get_second_pass_params. However when no
+  // stats are available, we still need to check if the new frame is a keyframe.
+  // For one pass rt, this is already checked in av1_get_one_pass_rt_params.
+  if (!use_one_pass_rt_params &&
+      (is_stat_generation_stage(cpi) || has_no_stats_stage(cpi))) {
     // Current frame is coded as a key-frame for any of the following cases:
     // 1) First frame of a video
     // 2) For all-intra frame encoding
@@ -1478,9 +1484,18 @@ int av1_encode_strategy(AV1_COMP *const cpi, size_t *const size,
     if (kf_requested && frame_update_type != OVERLAY_UPDATE &&
         frame_update_type != INTNL_OVERLAY_UPDATE) {
       frame_params.frame_type = KEY_FRAME;
-    } else {
+    } else if (is_stat_generation_stage(cpi)) {
+      // For stats generation, set the frame type to inter here.
       frame_params.frame_type = INTER_FRAME;
     }
+  }
+#endif
+
+  // Work out some encoding parameters specific to the pass:
+  if (has_no_stats_stage(cpi) && oxcf->q_cfg.aq_mode == CYCLIC_REFRESH_AQ) {
+    av1_cyclic_refresh_update_parameters(cpi);
+  } else if (is_stat_generation_stage(cpi)) {
+    cpi->td.mb.e_mbd.lossless[0] = is_lossless_requested(&oxcf->rc_cfg);
   } else if (is_stat_consumption_stage(cpi)) {
 #if CONFIG_MISMATCH_DEBUG
     mismatch_move_frame_idx_w();
@@ -1523,10 +1538,10 @@ int av1_encode_strategy(AV1_COMP *const cpi, size_t *const size,
       if (!ext_flags->refresh_frame.update_pending) {
         av1_get_ref_frames(ref_frame_map_pairs, cur_frame_disp, cpi,
                            cpi->gf_frame_index, 1, cm->remapped_ref_idx);
-      } else if (cpi->rtc_ref.set_ref_frame_config ||
+      } else if (cpi->ppi->rtc_ref.set_ref_frame_config ||
                  use_rtc_reference_structure_one_layer(cpi)) {
         for (unsigned int i = 0; i < INTER_REFS_PER_FRAME; i++)
-          cm->remapped_ref_idx[i] = cpi->rtc_ref.ref_idx[i];
+          cm->remapped_ref_idx[i] = cpi->ppi->rtc_ref.ref_idx[i];
       }
     }
 
@@ -1596,7 +1611,7 @@ int av1_encode_strategy(AV1_COMP *const cpi, size_t *const size,
   memcpy(frame_params.remapped_ref_idx, cm->remapped_ref_idx,
          REF_FRAMES * sizeof(*cm->remapped_ref_idx));
 
-  cpi->td.mb.delta_qindex = 0;
+  cpi->td.mb.rdmult_delta_qindex = cpi->td.mb.delta_qindex = 0;
 
   if (!frame_params.show_existing_frame) {
     cm->quant_params.using_qmatrix = oxcf->q_cfg.using_qm;
@@ -1662,7 +1677,19 @@ int av1_encode_strategy(AV1_COMP *const cpi, size_t *const size,
   // Leave a signal for a higher level caller about if this frame is droppable
   if (*size > 0) {
     cpi->droppable =
-        is_frame_droppable(&cpi->rtc_ref, &ext_flags->refresh_frame);
+        is_frame_droppable(&cpi->ppi->rtc_ref, &ext_flags->refresh_frame);
+  }
+
+  // For SVC: keep track of the (unscaled) source corresponding to the
+  // refresh of LAST reference (base temporal layer- TL0). Copy only for the
+  // top spatial enhancement layer only so all spatial layers of the next
+  // superframe have last_source to be aligned with previous TL0 superframe.
+  if (cpi->ppi->use_svc &&
+      cpi->svc.spatial_layer_id == cpi->svc.number_spatial_layers - 1 &&
+      cpi->svc.temporal_layer_id == 0) {
+    aom_yv12_copy_y(cpi->unscaled_source, &cpi->svc.source_last_TL0);
+    aom_yv12_copy_u(cpi->unscaled_source, &cpi->svc.source_last_TL0);
+    aom_yv12_copy_v(cpi->unscaled_source, &cpi->svc.source_last_TL0);
   }
 
   return AOM_CODEC_OK;

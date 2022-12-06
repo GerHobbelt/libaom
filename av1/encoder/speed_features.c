@@ -1255,6 +1255,7 @@ static void set_rt_speed_feature_framesize_dependent(const AV1_COMP *const cpi,
                                                      int speed) {
   const AV1_COMMON *const cm = &cpi->common;
   const int boosted = frame_is_boosted(cpi);
+  const int is_1080p_or_larger = AOMMIN(cm->width, cm->height) >= 1080;
   const int is_720p_or_larger = AOMMIN(cm->width, cm->height) >= 720;
   const int is_480p_or_larger = AOMMIN(cm->width, cm->height) >= 480;
   const int is_360p_or_larger = AOMMIN(cm->width, cm->height) >= 360;
@@ -1272,12 +1273,12 @@ static void set_rt_speed_feature_framesize_dependent(const AV1_COMP *const cpi,
     }
     if (speed == 8) sf->rt_sf.prefer_large_partition_blocks = 1;
     if (speed >= 8) {
-      sf->rt_sf.use_nonrd_filter_search = 0;
+      sf->rt_sf.use_nonrd_filter_search = 1;
       sf->rt_sf.tx_size_level_based_on_qstep = 1;
     }
     if (speed >= 9) {
       sf->rt_sf.use_comp_ref_nonrd = 0;
-      sf->rt_sf.nonrd_agressive_skip = 1;
+      sf->rt_sf.nonrd_aggressive_skip = 1;
       sf->rt_sf.skip_intra_pred = 1;
       // Only turn on enable_ref_short_signaling for low resolution when only
       // LAST and GOLDEN ref frames are used.
@@ -1296,12 +1297,14 @@ static void set_rt_speed_feature_framesize_dependent(const AV1_COMP *const cpi,
       }
 #endif
 #endif
+      sf->rt_sf.use_adaptive_subpel_search = false;
     }
     if (speed >= 10) {
       sf->rt_sf.skip_intra_pred = 2;
       sf->rt_sf.hybrid_intra_pickmode = 3;
       sf->rt_sf.reduce_mv_pel_precision_lowcomplex = 1;
       sf->rt_sf.reduce_mv_pel_precision_highmotion = 2;
+      sf->rt_sf.use_nonrd_filter_search = 0;
     }
   } else {
     sf->rt_sf.prune_intra_mode_based_on_mv_range = 2;
@@ -1327,12 +1330,16 @@ static void set_rt_speed_feature_framesize_dependent(const AV1_COMP *const cpi,
       sf->rt_sf.skip_cdef_sb = 1;
       sf->rt_sf.sad_based_adp_altref_lag = 2;
       sf->rt_sf.reduce_mv_pel_precision_highmotion = 2;
+      sf->rt_sf.use_adaptive_subpel_search = true;
+      sf->interp_sf.cb_pred_filter_search = 1;
     }
     if (speed >= 10) {
       sf->rt_sf.hybrid_intra_pickmode = 2;
       sf->rt_sf.sad_based_adp_altref_lag = 4;
       sf->rt_sf.tx_size_level_based_on_qstep = 0;
       sf->rt_sf.reduce_mv_pel_precision_highmotion = 3;
+      sf->rt_sf.use_adaptive_subpel_search = false;
+      sf->interp_sf.cb_pred_filter_search = 2;
     }
   }
   if (!is_480p_or_larger) {
@@ -1367,10 +1374,22 @@ static void set_rt_speed_feature_framesize_dependent(const AV1_COMP *const cpi,
       sf->rt_sf.reduce_mv_pel_precision_highmotion = 3;
     }
   }
+  // TODO(Any): Check/Tune settings of other sfs for 1080p.
+  if (is_1080p_or_larger) {
+    if (speed >= 7) {
+      sf->rt_sf.reduce_mv_pel_precision_highmotion = 0;
+      sf->rt_sf.use_adaptive_subpel_search = 0;
+    }
+    if (speed >= 9) sf->interp_sf.cb_pred_filter_search = 0;
+  } else {
+    if (speed >= 9) sf->lpf_sf.cdef_pick_method = CDEF_PICK_FROM_Q;
+    if (speed >= 10) sf->rt_sf.nonrd_aggressive_skip = 1;
+  }
+
   // Setting for SVC, or when the ref_frame_config control is
   // used to set the reference structure.
-  if (cpi->ppi->use_svc || cpi->rtc_ref.set_ref_frame_config) {
-    const RTC_REF *const rtc_ref = &cpi->rtc_ref;
+  if (cpi->ppi->use_svc || cpi->ppi->rtc_ref.set_ref_frame_config) {
+    const RTC_REF *const rtc_ref = &cpi->ppi->rtc_ref;
     // For SVC: for greater than 2 temporal layers, use better mv search on
     // base temporal layers, and only on base spatial layer if highest
     // resolution is above 640x360.
@@ -1388,7 +1407,7 @@ static void set_rt_speed_feature_framesize_dependent(const AV1_COMP *const cpi,
       sf->rt_sf.disable_cdf_update_non_reference_frame = true;
       sf->rt_sf.reduce_mv_pel_precision_highmotion = 3;
       if (rtc_ref->non_reference_frame) {
-        sf->rt_sf.nonrd_agressive_skip = 1;
+        sf->rt_sf.nonrd_aggressive_skip = 1;
         sf->mv_sf.subpel_search_method = SUBPEL_TREE_PRUNED_MORE;
       }
     }
@@ -1397,8 +1416,6 @@ static void set_rt_speed_feature_framesize_dependent(const AV1_COMP *const cpi,
       sf->rt_sf.check_only_zero_zeromv_on_large_blocks = false;
     else
       sf->rt_sf.check_only_zero_zeromv_on_large_blocks = true;
-    if (cpi->svc.number_temporal_layers > 1 && cpi->svc.temporal_layer_id == 0)
-      sf->rt_sf.source_metrics_sb_nonrd = 0;
     // Compound mode enabling.
     if (rtc_ref->ref_frame_comp[0] || rtc_ref->ref_frame_comp[1] ||
         rtc_ref->ref_frame_comp[2]) {
@@ -1416,16 +1433,24 @@ static void set_rt_speed_feature_framesize_dependent(const AV1_COMP *const cpi,
   // Screen settings.
   if (cpi->oxcf.tune_cfg.content == AOM_CONTENT_SCREEN) {
     // TODO(marpan): Check settings for speed 7 and 8.
+    if (speed >= 7) sf->rt_sf.reduce_mv_pel_precision_highmotion = 1;
+    if (speed >= 8) {
+      sf->rt_sf.nonrd_check_partition_merge_mode = 3;
+      sf->rt_sf.nonrd_prune_ref_frame_search = 1;
+      sf->rt_sf.use_nonrd_filter_search = 0;
+    }
     if (speed >= 9) {
       sf->rt_sf.prune_idtx_nonrd = 1;
       sf->rt_sf.part_early_exit_zeromv = 2;
       sf->rt_sf.skip_lf_screen = 1;
-      sf->rt_sf.use_nonrd_filter_search = 0;
       sf->rt_sf.nonrd_prune_ref_frame_search = 3;
       sf->rt_sf.var_part_split_threshold_shift = 10;
       sf->mv_sf.subpel_search_method = SUBPEL_TREE_PRUNED_MORE;
       sf->rt_sf.reduce_mv_pel_precision_highmotion = 3;
       sf->rt_sf.reduce_mv_pel_precision_lowcomplex = 1;
+      sf->lpf_sf.cdef_pick_method = CDEF_PICK_FROM_Q;
+      sf->rt_sf.nonrd_check_partition_merge_mode = 0;
+      sf->interp_sf.cb_pred_filter_search = 0;
     }
     if (speed >= 10) {
       if (cm->width * cm->height > 1920 * 1080)
@@ -1433,6 +1458,7 @@ static void set_rt_speed_feature_framesize_dependent(const AV1_COMP *const cpi,
       sf->rt_sf.set_zeromv_skip_based_on_source_sad = 2;
       sf->rt_sf.screen_content_cdef_filter_qindex_thresh = 80;
       sf->rt_sf.part_early_exit_zeromv = 1;
+      sf->rt_sf.nonrd_aggressive_skip = 1;
     }
     sf->rt_sf.use_nonrd_altref_frame = 0;
     sf->rt_sf.skip_cdef_sb = 1;
@@ -1719,13 +1745,11 @@ static void set_rt_speed_features_framesize_independent(AV1_COMP *cpi,
     sf->rt_sf.nonrd_prune_ref_frame_search = 2;
     sf->rt_sf.nonrd_check_partition_merge_mode = 0;
     sf->rt_sf.var_part_split_threshold_shift = 8;
-    sf->interp_sf.cb_pred_filter_search = 1;
     sf->rt_sf.var_part_based_on_qidx = 4;
     sf->rt_sf.partition_direct_merging = 1;
     sf->rt_sf.prune_compoundmode_with_singlemode_var = false;
   }
   if (speed >= 9) {
-    sf->lpf_sf.cdef_pick_method = CDEF_PICK_FROM_Q;
     sf->rt_sf.sse_early_term_inter_search = EARLY_TERM_IDX_3;
     sf->rt_sf.estimate_motion_for_var_based_partition = 0;
     sf->rt_sf.prefer_large_partition_blocks = 3;
@@ -1737,11 +1761,10 @@ static void set_rt_speed_features_framesize_independent(AV1_COMP *cpi,
     sf->rt_sf.frame_level_mode_cost_update = true;
     sf->rt_sf.check_only_zero_zeromv_on_large_blocks = true;
     sf->rt_sf.reduce_mv_pel_precision_highmotion = 0;
-    sf->rt_sf.use_adaptive_subpel_search = false;
+    sf->rt_sf.use_adaptive_subpel_search = true;
   }
   if (speed >= 10) {
     sf->rt_sf.sse_early_term_inter_search = EARLY_TERM_IDX_4;
-    sf->rt_sf.nonrd_agressive_skip = 1;
     sf->rt_sf.nonrd_prune_ref_frame_search = 3;
     sf->rt_sf.var_part_split_threshold_shift = 10;
     sf->mv_sf.subpel_search_method = SUBPEL_TREE_PRUNED_MORE;
@@ -2047,7 +2070,7 @@ static AOM_INLINE void init_rt_sf(REAL_TIME_SPEED_FEATURES *rt_sf) {
   rt_sf->fullpel_search_step_param = 0;
   for (int i = 0; i < BLOCK_SIZES; ++i)
     rt_sf->intra_y_mode_bsize_mask_nrd[i] = INTRA_ALL;
-  rt_sf->nonrd_agressive_skip = 0;
+  rt_sf->nonrd_aggressive_skip = 0;
   rt_sf->skip_cdef_sb = 0;
   rt_sf->force_large_partition_blocks_intra = 0;
   rt_sf->skip_tx_no_split_var_based_partition = 0;
@@ -2082,6 +2105,7 @@ static AOM_INLINE void init_rt_sf(REAL_TIME_SPEED_FEATURES *rt_sf) {
   rt_sf->use_adaptive_subpel_search = false;
   rt_sf->screen_content_cdef_filter_qindex_thresh = 0;
   rt_sf->enable_ref_short_signaling = false;
+  rt_sf->check_globalmv_on_single_ref = true;
 }
 
 // Populate appropriate sub-pel search method based on speed feature and user
