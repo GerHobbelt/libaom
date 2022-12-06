@@ -14,12 +14,22 @@
 #include "config/aom_dsp_rtcd.h"
 #include "aom_dsp/x86/synonyms.h"
 
+static int64_t k_means_horizontal_sum_sse2(__m128i a) {
+  const __m128i sum1 = _mm_unpackhi_epi64(a, a);
+  const __m128i sum2 = _mm_add_epi64(a, sum1);
+  int64_t res;
+  _mm_storel_epi64((__m128i *)&res, sum2);
+  return res;
+}
+
 void av1_calc_indices_dim1_sse2(const int *data, const int *centroids,
-                                uint8_t *indices, int n, int k) {
+                                uint8_t *indices, int64_t *total_dist, int n,
+                                int k) {
   const __m128i v_zero = _mm_setzero_si128();
   int l = 1;
   __m128i dist[PALETTE_MAX_SIZE];
   __m128i ind[2];
+  __m128i sum = _mm_setzero_si128();
 
   for (int i = 0; i < n; i += 4) {
     l = (l == 0) ? 1 : 0;
@@ -44,6 +54,13 @@ void av1_calc_indices_dim1_sse2(const int *data, const int *centroids,
           _mm_or_si128(_mm_andnot_si128(cmp, ind[l]), _mm_and_si128(cmp, ind1));
     }
     ind[l] = _mm_packus_epi16(ind[l], v_zero);
+    if (total_dist) {
+      // Convert to 64 bit and add to sum.
+      const __m128i dist1 = _mm_unpacklo_epi32(dist[0], v_zero);
+      const __m128i dist2 = _mm_unpackhi_epi32(dist[0], v_zero);
+      sum = _mm_add_epi64(sum, dist1);
+      sum = _mm_add_epi64(sum, dist2);
+    }
     if (l == 1) {
       __m128i p2 = _mm_packus_epi16(_mm_unpacklo_epi64(ind[0], ind[1]), v_zero);
       _mm_storel_epi64((__m128i *)indices, p2);
@@ -51,14 +68,28 @@ void av1_calc_indices_dim1_sse2(const int *data, const int *centroids,
     }
     data += 4;
   }
+  if (total_dist) {
+    *total_dist = k_means_horizontal_sum_sse2(sum);
+  }
+}
+
+static __m128i absolute_diff_epi32(__m128i a, __m128i b) {
+  const __m128i diff1 = _mm_sub_epi32(a, b);
+  const __m128i diff2 = _mm_sub_epi32(b, a);
+  const __m128i cmp = _mm_cmpgt_epi32(diff1, diff2);
+  const __m128i masked1 = _mm_and_si128(cmp, diff1);
+  const __m128i masked2 = _mm_andnot_si128(cmp, diff2);
+  return _mm_or_si128(masked1, masked2);
 }
 
 void av1_calc_indices_dim2_sse2(const int *data, const int *centroids,
-                                uint8_t *indices, int n, int k) {
+                                uint8_t *indices, int64_t *total_dist, int n,
+                                int k) {
   const __m128i v_zero = _mm_setzero_si128();
   int l = 1;
   __m128i dist[PALETTE_MAX_SIZE];
   __m128i ind[2];
+  __m128i sum = _mm_setzero_si128();
 
   for (int i = 0; i < n; i += 4) {
     l = (l == 0) ? 1 : 0;
@@ -71,8 +102,8 @@ void av1_calc_indices_dim2_sse2(const int *data, const int *centroids,
     for (int j = 0; j < k; j++) {
       __m128i cent0 = _mm_set1_epi32(centroids[2 * j]);
       __m128i cent1 = _mm_set1_epi32(centroids[2 * j + 1]);
-      __m128i d1 = _mm_sub_epi32(ind1, cent0);
-      __m128i d2 = _mm_sub_epi32(ind2, cent1);
+      __m128i d1 = absolute_diff_epi32(ind1, cent0);
+      __m128i d2 = absolute_diff_epi32(ind2, cent1);
       __m128i d3 = _mm_madd_epi16(d1, d1);
       __m128i d4 = _mm_madd_epi16(d2, d2);
       dist[j] = _mm_add_epi32(d3, d4);
@@ -89,11 +120,21 @@ void av1_calc_indices_dim2_sse2(const int *data, const int *centroids,
           _mm_or_si128(_mm_andnot_si128(cmp, ind[l]), _mm_and_si128(cmp, ind1));
     }
     ind[l] = _mm_packus_epi16(ind[l], v_zero);
+    if (total_dist) {
+      // Convert to 64 bit and add to sum.
+      const __m128i dist1 = _mm_unpacklo_epi32(dist[0], v_zero);
+      const __m128i dist2 = _mm_unpackhi_epi32(dist[0], v_zero);
+      sum = _mm_add_epi64(sum, dist1);
+      sum = _mm_add_epi64(sum, dist2);
+    }
     if (l == 1) {
       __m128i p2 = _mm_packus_epi16(_mm_unpacklo_epi64(ind[0], ind[1]), v_zero);
       _mm_storel_epi64((__m128i *)indices, p2);
       indices += 8;
     }
     data += 8;
+  }
+  if (total_dist) {
+    *total_dist = k_means_horizontal_sum_sse2(sum);
   }
 }
