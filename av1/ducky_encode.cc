@@ -47,6 +47,7 @@ class DuckyEncode::EncodeImpl {
   int g_usage;
   int max_ref_frames;
   int speed;
+  int base_qindex;
   enum aom_rc_mode rc_end_usage;
   aom_rational64_t timestamp_ratio;
   std::vector<FIRSTPASS_STATS> stats_list;
@@ -54,12 +55,13 @@ class DuckyEncode::EncodeImpl {
 };
 
 DuckyEncode::DuckyEncode(const VideoInfo &video_info, int max_ref_frames,
-                         int speed) {
+                         int speed, int base_qindex) {
   impl_ptr_ = std::unique_ptr<EncodeImpl>(new EncodeImpl());
   impl_ptr_->video_info = video_info;
   impl_ptr_->g_usage = GOOD;
   impl_ptr_->max_ref_frames = max_ref_frames;
   impl_ptr_->speed = speed;
+  impl_ptr_->base_qindex = base_qindex;
   impl_ptr_->rc_end_usage = AOM_Q;
   // TODO(angiebird): Set timestamp_ratio properly
   // timestamp_ratio.den = cfg->g_timebase.den;
@@ -81,6 +83,10 @@ static AV1EncoderConfig GetEncoderConfig(const VideoInfo &video_info,
   // g_timebase is the inverse of frame_rate
   cfg.g_timebase.num = video_info.frame_rate.den;
   cfg.g_timebase.den = video_info.frame_rate.num;
+  if (pass == AOM_RC_SECOND_PASS) {
+    cfg.rc_twopass_stats_in.sz =
+        (video_info.frame_count + 1) * sizeof(FIRSTPASS_STATS);
+  }
   AV1EncoderConfig oxcf = av1_get_encoder_config(&cfg);
   // TODO(angiebird): Why didn't we init use_highbitdepth in
   // av1_get_encoder_config()?
@@ -412,8 +418,10 @@ TplGopStats DuckyEncode::ObtainTplStats(const GopStruct gop_struct) {
         block_stats.col = mi_col * MI_SIZE;
         block_stats.height = (1 << block_mis_log2) * MI_SIZE;
         block_stats.width = (1 << block_mis_log2) * MI_SIZE;
-        block_stats.inter_cost = tpl_stats_ptr->inter_cost;
-        block_stats.intra_cost = tpl_stats_ptr->intra_cost;
+        block_stats.inter_cost = tpl_stats_ptr->inter_cost
+                                 << TPL_DEP_COST_SCALE_LOG2;
+        block_stats.intra_cost = tpl_stats_ptr->intra_cost
+                                 << TPL_DEP_COST_SCALE_LOG2;
         block_stats.ref_frame_index = { -1, -1 };
 
         for (int i = 0; i < kBlockRefCount; ++i) {
@@ -455,7 +463,8 @@ std::vector<TplGopStats> DuckyEncode::ComputeTplStats(
       // encoding frame frame_number
       aom::EncodeFrameDecision frame_decision = { aom::EncodeFrameMode::kQindex,
                                                   aom::EncodeGopMode::kGopRcl,
-                                                  { 128, -1 } };
+                                                  { impl_ptr_->base_qindex,
+                                                    -1 } };
       (void)frame;
       EncodeFrame(frame_decision);
       if (ppi->cpi->common.show_frame) pending_ctx_size_ = 0;

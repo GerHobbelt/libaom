@@ -188,6 +188,7 @@ struct av1_extracfg {
   // "--enable_diagonal_intra".
   int auto_intra_tools_off;
   int strict_level_conformance;
+  int kf_max_pyr_height;
 };
 
 #if CONFIG_REALTIME_ONLY
@@ -348,6 +349,7 @@ static const struct av1_extracfg default_extra_cfg = {
   NULL,            // second_pass_log
   0,               // auto_intra_tools_off
   0,               // strict_level_conformance
+  -1,              // kf_max_pyr_height
 };
 #else
 static const struct av1_extracfg default_extra_cfg = {
@@ -494,6 +496,7 @@ static const struct av1_extracfg default_extra_cfg = {
   NULL,            // second_pass_log
   0,               // auto_intra_tools_off
   0,               // strict_level_conformance
+  -1,              // kf_max_pyr_height
 };
 #endif
 
@@ -535,7 +538,7 @@ static INLINE int gcd(int64_t a, int b) {
   return (int)a;
 }
 
-void av1_reduce_ratio(aom_rational64_t *ratio) {
+static void reduce_ratio(aom_rational64_t *ratio) {
   const int denom = gcd(ratio->num, ratio->den);
   ratio->num /= denom;
   ratio->den /= denom;
@@ -612,8 +615,16 @@ static aom_codec_err_t allocate_and_set_string(const char *src,
 static aom_codec_err_t validate_config(aom_codec_alg_priv_t *ctx,
                                        const aom_codec_enc_cfg_t *cfg,
                                        const struct av1_extracfg *extra_cfg) {
-  RANGE_CHECK(cfg, g_w, 1, 65536);  // 16 bits available
-  RANGE_CHECK(cfg, g_h, 1, 65536);  // 16 bits available
+  RANGE_CHECK(cfg, g_w, 1, 65536);                        // 16 bits available
+  RANGE_CHECK(cfg, g_h, 1, 65536);                        // 16 bits available
+  RANGE_CHECK_HI(cfg, g_forced_max_frame_width, 65536);   // 16 bits available
+  RANGE_CHECK_HI(cfg, g_forced_max_frame_height, 65536);  // 16 bits available
+  if (cfg->g_forced_max_frame_width) {
+    RANGE_CHECK_HI(cfg, g_w, cfg->g_forced_max_frame_width);
+  }
+  if (cfg->g_forced_max_frame_height) {
+    RANGE_CHECK_HI(cfg, g_h, cfg->g_forced_max_frame_height);
+  }
   RANGE_CHECK(cfg, g_timebase.den, 1, 1000000000);
   RANGE_CHECK(cfg, g_timebase.num, 1, cfg->g_timebase.den);
   RANGE_CHECK_HI(cfg, g_profile, MAX_PROFILES - 1);
@@ -840,6 +851,14 @@ static aom_codec_err_t validate_config(aom_codec_alg_priv_t *ctx,
   RANGE_CHECK_BOOL(extra_cfg, auto_intra_tools_off);
   RANGE_CHECK_BOOL(extra_cfg, strict_level_conformance);
 
+  RANGE_CHECK(extra_cfg, kf_max_pyr_height, -1, 5);
+  if (extra_cfg->kf_max_pyr_height != -1 &&
+      extra_cfg->kf_max_pyr_height < (int)extra_cfg->gf_min_pyr_height) {
+    ERROR(
+        "The value of kf-max-pyr-height should not be smaller than "
+        "gf-min-pyr-height");
+  }
+
   return AOM_CODEC_OK;
 }
 
@@ -920,11 +939,10 @@ static void update_default_encoder_config(const cfg_options_t *cfg,
                                           struct av1_extracfg *extra_cfg) {
   extra_cfg->enable_cdef = (cfg->disable_cdef == 0) ? 1 : 0;
   extra_cfg->enable_restoration = (cfg->disable_lr == 0);
-  extra_cfg->superblock_size = (cfg->super_block_size == 64)
-                                   ? AOM_SUPERBLOCK_SIZE_64X64
-                                   : (cfg->super_block_size == 128)
-                                         ? AOM_SUPERBLOCK_SIZE_128X128
-                                         : AOM_SUPERBLOCK_SIZE_DYNAMIC;
+  extra_cfg->superblock_size =
+      (cfg->super_block_size == 64)    ? AOM_SUPERBLOCK_SIZE_64X64
+      : (cfg->super_block_size == 128) ? AOM_SUPERBLOCK_SIZE_128X128
+                                       : AOM_SUPERBLOCK_SIZE_DYNAMIC;
   extra_cfg->enable_warped_motion = (cfg->disable_warp_motion == 0);
   extra_cfg->enable_dist_wtd_comp = (cfg->disable_dist_wtd_comp == 0);
   extra_cfg->enable_diff_wtd_comp = (cfg->disable_diff_wtd_comp == 0);
@@ -1121,7 +1139,7 @@ static aom_codec_err_t set_encoder_config(AV1EncoderConfig *oxcf,
       extra_cfg->allow_ref_frame_mvs && !cfg->large_scale_tile;
   tool_cfg->superblock_size = extra_cfg->superblock_size;
   tool_cfg->enable_monochrome = cfg->monochrome;
-  tool_cfg->full_still_picture_hdr = cfg->full_still_picture_hdr;
+  tool_cfg->full_still_picture_hdr = cfg->full_still_picture_hdr != 0;
   tool_cfg->enable_dual_filter = extra_cfg->enable_dual_filter;
   tool_cfg->enable_order_hint = extra_cfg->enable_order_hint;
   tool_cfg->enable_interintra_comp = extra_cfg->enable_interintra_comp;
@@ -1270,10 +1288,10 @@ static aom_codec_err_t set_encoder_config(AV1EncoderConfig *oxcf,
   tile_cfg->tile_width_count = AOMMIN(cfg->tile_width_count, MAX_TILE_COLS);
   tile_cfg->tile_height_count = AOMMIN(cfg->tile_height_count, MAX_TILE_ROWS);
   for (int i = 0; i < tile_cfg->tile_width_count; i++) {
-    tile_cfg->tile_widths[i] = AOMMAX(cfg->tile_widths[i], 1);
+    tile_cfg->tile_widths[i] = cfg->tile_widths[i];
   }
   for (int i = 0; i < tile_cfg->tile_height_count; i++) {
-    tile_cfg->tile_heights[i] = AOMMAX(cfg->tile_heights[i], 1);
+    tile_cfg->tile_heights[i] = cfg->tile_heights[i];
   }
   tile_cfg->enable_ext_tile_debug = extra_cfg->ext_tile_debug;
 
@@ -1417,6 +1435,8 @@ static aom_codec_err_t set_encoder_config(AV1EncoderConfig *oxcf,
   oxcf->partition_info_path = extra_cfg->partition_info_path;
 
   oxcf->strict_level_conformance = extra_cfg->strict_level_conformance;
+
+  oxcf->kf_max_pyr_height = extra_cfg->kf_max_pyr_height;
 
   return AOM_CODEC_OK;
 }
@@ -2547,7 +2567,7 @@ static aom_codec_err_t encoder_init(aom_codec_ctx_t *ctx) {
       priv->timestamp_ratio.den = priv->cfg.g_timebase.den;
       priv->timestamp_ratio.num =
           (int64_t)priv->cfg.g_timebase.num * TICKS_PER_SEC;
-      av1_reduce_ratio(&priv->timestamp_ratio);
+      reduce_ratio(&priv->timestamp_ratio);
 
       set_encoder_config(&priv->oxcf, &priv->cfg, &priv->extra_cfg);
       if (priv->oxcf.rc_cfg.mode != AOM_CBR &&
@@ -2743,9 +2763,10 @@ static aom_codec_err_t encoder_encode(aom_codec_alg_priv_t *ctx,
   if (img != NULL) {
     res = validate_img(ctx, img);
     if (res == AOM_CODEC_OK) {
-      const size_t uncompressed_frame_sz = ALIGN_POWER_OF_TWO(ctx->cfg.g_w, 5) *
-                                           ALIGN_POWER_OF_TWO(ctx->cfg.g_h, 5) *
-                                           av1_get_image_bps(img) / 8;
+      const size_t uncompressed_frame_sz =
+          ALIGN_POWER_OF_TWO_UNSIGNED(ctx->cfg.g_w, 5) *
+          ALIGN_POWER_OF_TWO_UNSIGNED(ctx->cfg.g_h, 5) *
+          av1_get_image_bps(img) / 8;
 
       // Due to the presence of no-show frames, the ctx->cx_data buffer holds
       // compressed data corresponding to multiple frames. As no-show frames are
@@ -2835,6 +2856,10 @@ static aom_codec_err_t encoder_encode(aom_codec_alg_priv_t *ctx,
   if (res == AOM_CODEC_OK) {
     AV1_COMP *cpi = ppi->cpi;
 
+    const int num_layers =
+        cpi->svc.number_spatial_layers * cpi->svc.number_temporal_layers;
+    av1_alloc_layer_context(cpi, num_layers);
+
     // Set up internal flags
     if (ctx->base.init_flags & AOM_CODEC_USE_PSNR) ppi->b_calculate_psnr = 1;
 
@@ -2899,7 +2924,7 @@ static aom_codec_err_t encoder_encode(aom_codec_alg_priv_t *ctx,
       // key frame flag when we actually encode this frame.
       if (av1_receive_raw_frame(cpi, flags | ctx->next_frame_flags, &sd,
                                 src_time_stamp, src_end_time_stamp)) {
-        res = update_error_state(ctx, &ppi->error);
+        res = update_error_state(ctx, cpi->common.error);
       }
       ctx->next_frame_flags = 0;
     }
@@ -3306,7 +3331,7 @@ static aom_codec_err_t ctrl_set_scale_mode(aom_codec_alg_priv_t *ctx,
   if (mode) {
     const int res = av1_set_internal_size(
         &ctx->ppi->cpi->oxcf, &ctx->ppi->cpi->resize_pending_params,
-        (AOM_SCALING)mode->h_scaling_mode, (AOM_SCALING)mode->v_scaling_mode);
+        mode->h_scaling_mode, mode->v_scaling_mode);
     av1_check_fpmt_config(ctx->ppi, &ctx->ppi->cpi->oxcf);
     return (res == 0) ? AOM_CODEC_OK : AOM_CODEC_INVALID_PARAM;
   } else {
@@ -3356,6 +3381,10 @@ static aom_codec_err_t ctrl_set_svc_params(aom_codec_alg_priv_t *ctx,
   if (ppi->number_spatial_layers > 1 || ppi->number_temporal_layers > 1) {
     unsigned int sl, tl;
     ctx->ppi->use_svc = 1;
+    const int num_layers =
+        ppi->number_spatial_layers * ppi->number_temporal_layers;
+    av1_alloc_layer_context(cpi, num_layers);
+
     for (sl = 0; sl < ppi->number_spatial_layers; ++sl) {
       for (tl = 0; tl < ppi->number_temporal_layers; ++tl) {
         const int layer = LAYER_IDS_TO_IDX(sl, tl, ppi->number_temporal_layers);
@@ -3390,13 +3419,13 @@ static aom_codec_err_t ctrl_set_svc_ref_frame_config(aom_codec_alg_priv_t *ctx,
   AV1_COMP *const cpi = ctx->ppi->cpi;
   aom_svc_ref_frame_config_t *const data =
       va_arg(args, aom_svc_ref_frame_config_t *);
-  cpi->svc.set_ref_frame_config = 1;
+  cpi->rtc_ref.set_ref_frame_config = 1;
   for (unsigned int i = 0; i < INTER_REFS_PER_FRAME; ++i) {
-    cpi->svc.reference[i] = data->reference[i];
-    cpi->svc.ref_idx[i] = data->ref_idx[i];
+    cpi->rtc_ref.reference[i] = data->reference[i];
+    cpi->rtc_ref.ref_idx[i] = data->ref_idx[i];
   }
   for (unsigned int i = 0; i < REF_FRAMES; ++i)
-    cpi->svc.refresh[i] = data->refresh[i];
+    cpi->rtc_ref.refresh[i] = data->refresh[i];
   cpi->svc.use_flexible_mode = 1;
   cpi->svc.ksvc_fixed_mode = 0;
   return AOM_CODEC_OK;
@@ -3407,9 +3436,9 @@ static aom_codec_err_t ctrl_set_svc_ref_frame_comp_pred(
   AV1_COMP *const cpi = ctx->ppi->cpi;
   aom_svc_ref_frame_comp_pred_t *const data =
       va_arg(args, aom_svc_ref_frame_comp_pred_t *);
-  cpi->svc.ref_frame_comp[0] = data->use_comp_pred[0];
-  cpi->svc.ref_frame_comp[1] = data->use_comp_pred[1];
-  cpi->svc.ref_frame_comp[2] = data->use_comp_pred[2];
+  cpi->rtc_ref.ref_frame_comp[0] = data->use_comp_pred[0];
+  cpi->rtc_ref.ref_frame_comp[1] = data->use_comp_pred[1];
+  cpi->rtc_ref.ref_frame_comp[2] = data->use_comp_pred[2];
   return AOM_CODEC_OK;
 }
 
@@ -3916,6 +3945,17 @@ static aom_codec_err_t encoder_set_option(aom_codec_alg_priv_t *ctx,
                               &g_av1_codec_arg_defs.strict_level_conformance,
                               argv, err_string)) {
     extra_cfg.strict_level_conformance = arg_parse_int_helper(&arg, err_string);
+  } else if (arg_match_helper(&arg, &g_av1_codec_arg_defs.kf_max_pyr_height,
+                              argv, err_string)) {
+    extra_cfg.kf_max_pyr_height = arg_parse_int_helper(&arg, err_string);
+  } else if (arg_match_helper(&arg, &g_av1_codec_arg_defs.tile_width, argv,
+                              err_string)) {
+    ctx->cfg.tile_width_count = arg_parse_list_helper(
+        &arg, ctx->cfg.tile_widths, MAX_TILE_WIDTHS, err_string);
+  } else if (arg_match_helper(&arg, &g_av1_codec_arg_defs.tile_height, argv,
+                              err_string)) {
+    ctx->cfg.tile_height_count = arg_parse_list_helper(
+        &arg, ctx->cfg.tile_heights, MAX_TILE_HEIGHTS, err_string);
   } else {
     match = 0;
     snprintf(err_string, ARG_ERR_MSG_MAX_LEN, "Cannot find aom option %s",

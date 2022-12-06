@@ -25,6 +25,7 @@ class MockRateControlQMode : public AV1RateControlQModeInterface {
               (const FirstpassInfo &firstpass_info), (override));
   MOCK_METHOD(StatusOr<GopEncodeInfo>, GetGopEncodeInfo,
               (const GopStruct &gop_struct, const TplGopStats &tpl_gop_stats,
+               const std::vector<LookaheadStats> &lookahead_stats,
                const RefFrameTable &ref_frame_table_snapshot_init),
               (override));
 };

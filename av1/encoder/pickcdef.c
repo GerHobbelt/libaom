@@ -267,6 +267,22 @@ static uint64_t compute_cdef_dist_highbd(void *dst, int dstride, uint16_t *src,
   return sum >> 2 * coeff_shift;
 }
 #endif
+
+// Checks dual and quad block processing is applicable for block widths 8 and 4
+// respectively.
+static INLINE int is_dual_or_quad_applicable(cdef_list *dlist, int width,
+                                             int cdef_count, int bi, int iter) {
+  assert(width == 8 || width == 4);
+  const int blk_offset = (width == 8) ? 1 : 3;
+  if ((iter + blk_offset) >= cdef_count) return 0;
+
+  if (dlist[bi].by == dlist[bi + blk_offset].by &&
+      dlist[bi].bx + blk_offset == dlist[bi + blk_offset].bx)
+    return 1;
+
+  return 0;
+}
+
 static uint64_t compute_cdef_dist(void *dst, int dstride, uint16_t *src,
                                   cdef_list *dlist, int cdef_count,
                                   BLOCK_SIZE bsize, int coeff_shift, int row,
@@ -275,18 +291,34 @@ static uint64_t compute_cdef_dist(void *dst, int dstride, uint16_t *src,
          bsize == BLOCK_8X8);
   uint64_t sum = 0;
   int bi, bx, by;
+  int iter = 0;
+  int inc = 1;
   uint8_t *dst8 = (uint8_t *)dst;
   uint8_t *dst_buff = &dst8[row * dstride + col];
   int src_stride, width, height, width_log2, height_log2;
   init_src_params(&src_stride, &width, &height, &width_log2, &height_log2,
                   bsize);
-  for (bi = 0; bi < cdef_count; bi++) {
+
+  const int num_blks = 16 / width;
+  for (bi = 0; bi < cdef_count; bi += inc) {
     by = dlist[bi].by;
     bx = dlist[bi].bx;
-    sum += aom_mse_wxh_16bit(
-        &dst_buff[(by << height_log2) * dstride + (bx << width_log2)], dstride,
-        &src[bi << (height_log2 + width_log2)], src_stride, width, height);
+    uint16_t *src_tmp = &src[bi << (height_log2 + width_log2)];
+    uint8_t *dst_tmp =
+        &dst_buff[(by << height_log2) * dstride + (bx << width_log2)];
+
+    if (is_dual_or_quad_applicable(dlist, width, cdef_count, bi, iter)) {
+      sum += aom_mse_16xh_16bit(dst_tmp, dstride, src_tmp, width, height);
+      iter += num_blks;
+      inc = num_blks;
+    } else {
+      sum += aom_mse_wxh_16bit(dst_tmp, dstride, src_tmp, src_stride, width,
+                               height);
+      iter += 1;
+      inc = 1;
+    }
   }
+
   return sum >> 2 * coeff_shift;
 }
 
@@ -508,7 +540,7 @@ static AOM_INLINE void cdef_params_init(const YV12_BUFFER_CONFIG *frame,
 }
 
 static void pick_cdef_from_qp(AV1_COMMON *const cm, int skip_cdef,
-                              int frames_since_key, int is_screen_content) {
+                              int is_screen_content) {
   const int bd = cm->seq_params->bit_depth;
   const int q =
       av1_ac_quant_QTX(cm->quant_params.base_qindex, 0, bd) >> (bd - 8);
@@ -574,10 +606,14 @@ static void pick_cdef_from_qp(AV1_COMMON *const cm, int skip_cdef,
   cdef_info->cdef_uv_strengths[0] =
       predicted_uv_f1 * CDEF_SEC_STRENGTHS + predicted_uv_f2;
 
+  // mbmi->cdef_strength is already set in the encoding stage. We don't need to
+  // set it again here.
   if (skip_cdef) {
     cdef_info->cdef_strengths[1] = 0;
     cdef_info->cdef_uv_strengths[1] = 0;
+    return;
   }
+
   const CommonModeInfoParams *const mi_params = &cm->mi_params;
   const int nvfb = (mi_params->mi_rows + MI_SIZE_64X64 - 1) / MI_SIZE_64X64;
   const int nhfb = (mi_params->mi_cols + MI_SIZE_64X64 - 1) / MI_SIZE_64X64;
@@ -586,10 +622,6 @@ static void pick_cdef_from_qp(AV1_COMMON *const cm, int skip_cdef,
     for (int c = 0; c < nhfb; ++c) {
       MB_MODE_INFO *current_mbmi = mbmi[MI_SIZE_64X64 * c];
       current_mbmi->cdef_strength = 0;
-      if (skip_cdef && current_mbmi->skip_cdef_curr_sb &&
-          frames_since_key > 10) {
-        current_mbmi->cdef_strength = 1;
-      }
     }
     mbmi += MI_SIZE_64X64 * mi_params->mi_stride;
   }
@@ -598,9 +630,8 @@ static void pick_cdef_from_qp(AV1_COMMON *const cm, int skip_cdef,
 void av1_cdef_search(MultiThreadInfo *mt_info, const YV12_BUFFER_CONFIG *frame,
                      const YV12_BUFFER_CONFIG *ref, AV1_COMMON *cm,
                      MACROBLOCKD *xd, CDEF_PICK_METHOD pick_method, int rdmult,
-                     int skip_cdef_feature, int frames_since_key,
-                     CDEF_CONTROL cdef_control, const int is_screen_content,
-                     int non_reference_frame) {
+                     int skip_cdef_feature, CDEF_CONTROL cdef_control,
+                     const int is_screen_content, int non_reference_frame) {
   assert(cdef_control != CDEF_NONE);
   if (cdef_control == CDEF_REFERENCE && non_reference_frame) {
     CdefInfo *const cdef_info = &cm->cdef_info;
@@ -612,8 +643,7 @@ void av1_cdef_search(MultiThreadInfo *mt_info, const YV12_BUFFER_CONFIG *frame,
   }
 
   if (pick_method == CDEF_PICK_FROM_Q) {
-    pick_cdef_from_qp(cm, skip_cdef_feature, frames_since_key,
-                      is_screen_content);
+    pick_cdef_from_qp(cm, skip_cdef_feature, is_screen_content);
     return;
   }
   const CommonModeInfoParams *const mi_params = &cm->mi_params;

@@ -310,8 +310,7 @@ int is_forced_keyframe_pending(struct lookahead_ctx *lookahead,
 // Return the frame source, or NULL if we couldn't find one
 static struct lookahead_entry *choose_frame_source(
     AV1_COMP *const cpi, int *const flush, int *pop_lookahead,
-    struct lookahead_entry **last_source,
-    EncodeFrameParams *const frame_params) {
+    struct lookahead_entry **last_source, int *const show_frame) {
   AV1_COMMON *const cm = &cpi->common;
   const GF_GROUP *const gf_group = &cpi->ppi->gf_group;
   struct lookahead_entry *source = NULL;
@@ -353,7 +352,7 @@ static struct lookahead_entry *choose_frame_source(
     src_index = 0;
   }
 
-  frame_params->show_frame = *pop_lookahead;
+  *show_frame = *pop_lookahead;
 
 #if CONFIG_FPMT_TEST
   if (cpi->ppi->fpmt_unit_test_cfg == PARALLEL_ENCODE) {
@@ -365,7 +364,7 @@ static struct lookahead_entry *choose_frame_source(
         !is_stat_generation_stage(cpi))
       src_index = gf_group->src_offset[cpi->gf_frame_index];
   }
-  if (frame_params->show_frame) {
+  if (*show_frame) {
     // show frame, pop from buffer
     // Get last frame source.
     if (cm->current_frame.frame_number > 0) {
@@ -413,35 +412,35 @@ static void update_frame_flags(const AV1_COMMON *const cm,
                                const RefreshFrameInfo *const refresh_frame,
                                unsigned int *frame_flags) {
   if (encode_show_existing_frame(cm)) {
-    *frame_flags &= ~FRAMEFLAGS_GOLDEN;
-    *frame_flags &= ~FRAMEFLAGS_BWDREF;
-    *frame_flags &= ~FRAMEFLAGS_ALTREF;
-    *frame_flags &= ~FRAMEFLAGS_KEY;
+    *frame_flags &= ~(uint32_t)FRAMEFLAGS_GOLDEN;
+    *frame_flags &= ~(uint32_t)FRAMEFLAGS_BWDREF;
+    *frame_flags &= ~(uint32_t)FRAMEFLAGS_ALTREF;
+    *frame_flags &= ~(uint32_t)FRAMEFLAGS_KEY;
     return;
   }
 
   if (refresh_frame->golden_frame) {
     *frame_flags |= FRAMEFLAGS_GOLDEN;
   } else {
-    *frame_flags &= ~FRAMEFLAGS_GOLDEN;
+    *frame_flags &= ~(uint32_t)FRAMEFLAGS_GOLDEN;
   }
 
   if (refresh_frame->alt_ref_frame) {
     *frame_flags |= FRAMEFLAGS_ALTREF;
   } else {
-    *frame_flags &= ~FRAMEFLAGS_ALTREF;
+    *frame_flags &= ~(uint32_t)FRAMEFLAGS_ALTREF;
   }
 
   if (refresh_frame->bwd_ref_frame) {
     *frame_flags |= FRAMEFLAGS_BWDREF;
   } else {
-    *frame_flags &= ~FRAMEFLAGS_BWDREF;
+    *frame_flags &= ~(uint32_t)FRAMEFLAGS_BWDREF;
   }
 
   if (cm->current_frame.frame_type == KEY_FRAME) {
     *frame_flags |= FRAMEFLAGS_KEY;
   } else {
-    *frame_flags &= ~FRAMEFLAGS_KEY;
+    *frame_flags &= ~(uint32_t)FRAMEFLAGS_KEY;
   }
 }
 
@@ -616,8 +615,8 @@ int av1_get_refresh_frame_flags(
   // flags to 0 to keep things consistent.
   if (frame_params->show_existing_frame) return 0;
 
-  const SVC *const svc = &cpi->svc;
-  if (is_frame_droppable(svc, ext_refresh_frame_flags)) return 0;
+  const RTC_REF *const rtc_ref = &cpi->rtc_ref;
+  if (is_frame_droppable(rtc_ref, ext_refresh_frame_flags)) return 0;
 
 #if !CONFIG_REALTIME_ONLY
   if (cpi->use_ducky_encode &&
@@ -630,10 +629,12 @@ int av1_get_refresh_frame_flags(
 
   int refresh_mask = 0;
   if (ext_refresh_frame_flags->update_pending) {
-    if (svc->set_ref_frame_config) {
+    if (rtc_ref->set_ref_frame_config ||
+        use_rtc_reference_structure_one_layer(cpi)) {
       for (unsigned int i = 0; i < INTER_REFS_PER_FRAME; i++) {
-        int ref_frame_map_idx = svc->ref_idx[i];
-        refresh_mask |= svc->refresh[ref_frame_map_idx] << ref_frame_map_idx;
+        int ref_frame_map_idx = rtc_ref->ref_idx[i];
+        refresh_mask |= rtc_ref->refresh[ref_frame_map_idx]
+                        << ref_frame_map_idx;
       }
       return refresh_mask;
     }
@@ -792,6 +793,18 @@ static int denoise_and_encode(AV1_COMP *const cpi, uint8_t *const dest,
     }
 
     if (is_second_arf) {
+      // Allocate the memory for tf_buf_second_arf buffer, only when it is
+      // required.
+      int ret = aom_realloc_frame_buffer(
+          &cpi->ppi->tf_info.tf_buf_second_arf, oxcf->frm_dim_cfg.width,
+          oxcf->frm_dim_cfg.height, cm->seq_params->subsampling_x,
+          cm->seq_params->subsampling_y, cm->seq_params->use_highbitdepth,
+          cpi->oxcf.border_in_pixels, cm->features.byte_alignment, NULL, NULL,
+          NULL, cpi->oxcf.tool_cfg.enable_global_motion, 0);
+      if (ret)
+        aom_internal_error(cm->error, AOM_CODEC_MEM_ERROR,
+                           "Failed to allocate tf_buf_second_arf");
+
       YV12_BUFFER_CONFIG *tf_buf_second_arf =
           &cpi->ppi->tf_info.tf_buf_second_arf;
       // We didn't apply temporal filtering for second arf ahead in
@@ -807,11 +820,18 @@ static int denoise_and_encode(AV1_COMP *const cpi, uint8_t *const dest,
       if (show_existing_alt_ref) {
         aom_extend_frame_borders(tf_buf_second_arf, av1_num_planes(cm));
         frame_input->source = tf_buf_second_arf;
-        aom_copy_metadata_to_frame_buffer(frame_input->source,
-                                          source_buffer->metadata);
       }
       // Currently INTNL_ARF_UPDATE only do show_existing.
       cpi->common.showable_frame |= 1;
+    }
+
+    // Copy source metadata to the temporal filtered frame
+    if (source_buffer->metadata &&
+        aom_copy_metadata_to_frame_buffer(frame_input->source,
+                                          source_buffer->metadata)) {
+      aom_internal_error(
+          cm->error, AOM_CODEC_MEM_ERROR,
+          "Failed to copy source metadata to the temporal filtered frame");
     }
   }
 #if CONFIG_COLLECT_COMPONENT_TIMING
@@ -823,8 +843,7 @@ static int denoise_and_encode(AV1_COMP *const cpi, uint8_t *const dest,
   cm->show_frame = frame_params->show_frame;
   cm->current_frame.frame_type = frame_params->frame_type;
   // TODO(bohanli): Why is this? what part of it is necessary?
-  av1_set_frame_size(cpi, cm->superres_upscaled_width,
-                     cm->superres_upscaled_height);
+  av1_set_frame_size(cpi, cm->width, cm->height);
   if (set_mv_params) av1_set_mv_search_params(cpi);
 
 #if CONFIG_RD_COMMAND
@@ -976,13 +995,20 @@ void av1_get_ref_frames(RefFrameMapPair ref_frame_map_pairs[REF_FRAMES],
 #if !CONFIG_REALTIME_ONLY
   if (cpi->use_ducky_encode &&
       cpi->ducky_encode_info.frame_info.gop_mode == DUCKY_ENCODE_GOP_MODE_RCL) {
+    int valid_rf_idx = 0;
     for (int rf = LAST_FRAME; rf < REF_FRAMES; ++rf) {
-      for (int i = 0; i < REF_FRAMES; ++i) remapped_ref_idx[i] = 0;
       if (cpi->ppi->gf_group.ref_frame_list[gf_index][rf] != INVALID_IDX) {
         remapped_ref_idx[rf - LAST_FRAME] =
             cpi->ppi->gf_group.ref_frame_list[gf_index][rf];
+        valid_rf_idx = remapped_ref_idx[rf - LAST_FRAME];
       }
     }
+
+    for (int i = 0; i < REF_FRAMES; ++i) {
+      if (remapped_ref_idx[i] == INVALID_IDX)
+        remapped_ref_idx[i] = valid_rf_idx;
+    }
+
     return;
   }
 #endif  // !CONFIG_REALTIME_ONLY
@@ -1340,7 +1366,7 @@ int av1_encode_strategy(AV1_COMP *const cpi, size_t *const size,
     frame_params.show_frame = 1;
   } else {
     source = choose_frame_source(cpi, &flush, pop_lookahead, &last_source,
-                                 &frame_params);
+                                 &frame_params.show_frame);
   }
 
   if (source == NULL) {  // If no source was found, we can't encode a frame.
@@ -1407,14 +1433,16 @@ int av1_encode_strategy(AV1_COMP *const cpi, size_t *const size,
   start_timing(cpi, av1_get_one_pass_rt_params_time);
 #endif
 #if CONFIG_REALTIME_ONLY
-  av1_get_one_pass_rt_params(cpi, &frame_params, &frame_input, *frame_flags);
-  if (use_one_pass_rt_reference_structure(cpi))
-    av1_set_reference_structure_one_pass_rt(cpi, cpi->gf_frame_index == 0);
+  av1_get_one_pass_rt_params(cpi, &frame_params.frame_type, &frame_input,
+                             *frame_flags);
+  if (use_rtc_reference_structure_one_layer(cpi))
+    av1_set_rtc_reference_structure_one_layer(cpi, cpi->gf_frame_index == 0);
 #else
   if (use_one_pass_rt_params) {
-    av1_get_one_pass_rt_params(cpi, &frame_params, &frame_input, *frame_flags);
-    if (use_one_pass_rt_reference_structure(cpi))
-      av1_set_reference_structure_one_pass_rt(cpi, cpi->gf_frame_index == 0);
+    av1_get_one_pass_rt_params(cpi, &frame_params.frame_type, &frame_input,
+                               *frame_flags);
+    if (use_rtc_reference_structure_one_layer(cpi))
+      av1_set_rtc_reference_structure_one_layer(cpi, cpi->gf_frame_index == 0);
   }
 #endif
 #if CONFIG_COLLECT_COMPONENT_TIMING
@@ -1495,9 +1523,10 @@ int av1_encode_strategy(AV1_COMP *const cpi, size_t *const size,
       if (!ext_flags->refresh_frame.update_pending) {
         av1_get_ref_frames(ref_frame_map_pairs, cur_frame_disp, cpi,
                            cpi->gf_frame_index, 1, cm->remapped_ref_idx);
-      } else if (cpi->svc.set_ref_frame_config) {
+      } else if (cpi->rtc_ref.set_ref_frame_config ||
+                 use_rtc_reference_structure_one_layer(cpi)) {
         for (unsigned int i = 0; i < INTER_REFS_PER_FRAME; i++)
-          cm->remapped_ref_idx[i] = cpi->svc.ref_idx[i];
+          cm->remapped_ref_idx[i] = cpi->rtc_ref.ref_idx[i];
       }
     }
 
@@ -1632,7 +1661,8 @@ int av1_encode_strategy(AV1_COMP *const cpi, size_t *const size,
 
   // Leave a signal for a higher level caller about if this frame is droppable
   if (*size > 0) {
-    cpi->droppable = is_frame_droppable(&cpi->svc, &ext_flags->refresh_frame);
+    cpi->droppable =
+        is_frame_droppable(&cpi->rtc_ref, &ext_flags->refresh_frame);
   }
 
   return AOM_CODEC_OK;

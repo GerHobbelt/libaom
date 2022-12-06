@@ -724,7 +724,7 @@ void av1_set_offsets(const AV1_COMP *const cpi, const TileInfo *const tile,
  * \param[in]    ctx            Structure to hold snapshot of coding context
                                 during the mode picking process
  *
- * \return Nothing is returned. Instead, the MB_MODE_INFO struct inside x
+ * \remark Nothing is returned. Instead, the MB_MODE_INFO struct inside x
  * is modified to store information about the best mode computed
  * in this function. The rd_cost struct is also updated with the RD stats
  * corresponding to the best mode found.
@@ -810,7 +810,7 @@ static AOM_INLINE void wait_for_top_right_sb(
  *                              chosen modes for the current block
  * \param[in]    best_rd        Upper bound of rd cost of a valid partition
  *
- * \return Nothing is returned. Instead, the chosen modes and contexts necessary
+ * \remark Nothing is returned. Instead, the chosen modes and contexts necessary
  * for reconstruction are stored in ctx, the rate-distortion stats are stored in
  * rd_cost. If no valid mode leading to rd_cost <= best_rd, the status will be
  * signalled by an INT64_MAX rd_cost->rdcost.
@@ -1391,7 +1391,7 @@ static void update_stats(const AV1_COMMON *const cm, ThreadData *td) {
  *                         chosen modes for the current block
  * \param[in]    rate      Pointer to the total rate for the current block
  *
- * \return Nothing is returned. Instead, reconstructions (w/o in-loop filters)
+ * \remark Nothing is returned. Instead, reconstructions (w/o in-loop filters)
  * will be updated in the pixel buffers in td->mb.e_mbd. Also, the chosen modes
  * will be stored in the MB_MODE_INFO buffer td->mb.e_mbd.mi[0].
  */
@@ -1554,7 +1554,7 @@ static void encode_b(const AV1_COMP *const cpi, TileDataEnc *tile_data,
  *                         partitions and mode info for the current block
  * \param[in]    rate      Pointer to the total rate for the current block
  *
- * \return Nothing is returned. Instead, reconstructions (w/o in-loop filters)
+ * \remark Nothing is returned. Instead, reconstructions (w/o in-loop filters)
  * will be updated in the pixel buffers in td->mb.e_mbd.
  */
 static void encode_sb(const AV1_COMP *const cpi, ThreadData *td,
@@ -1736,7 +1736,7 @@ reference for future sub-partitions
 * \param[in]    pc_tree   Pointer to the PC_TREE node holding the picked
 partitions and mode info for the current block
 *
-* \return Nothing is returned. The pc_tree struct is modified to store the
+* \remark Nothing is returned. The pc_tree struct is modified to store the
 * picked partition and modes. The rate and dist are also updated with those
 * corresponding to the best partition found.
 */
@@ -2141,6 +2141,46 @@ static void encode_b_nonrd(const AV1_COMP *const cpi, TileDataEnc *tile_data,
 #endif
 }
 
+static int get_force_zeromv_skip_flag_for_blk(const AV1_COMP *cpi,
+                                              const MACROBLOCK *x,
+                                              BLOCK_SIZE bsize) {
+  // Force zero MV skip based on SB level decision
+  if (x->force_zeromv_skip_for_sb < 2) return x->force_zeromv_skip_for_sb;
+
+  // For blocks of size equal to superblock size, the decision would have been
+  // already done at superblock level. Hence zeromv-skip decision is skipped.
+  const AV1_COMMON *const cm = &cpi->common;
+  if (bsize == cm->seq_params->sb_size) return 0;
+
+  const int num_planes = av1_num_planes(cm);
+  const MACROBLOCKD *const xd = &x->e_mbd;
+  const unsigned int thresh_exit_part_y =
+      cpi->zeromv_skip_thresh_exit_part[bsize];
+  const unsigned int thresh_exit_part_uv =
+      CALC_CHROMA_THRESH_FOR_ZEROMV_SKIP(thresh_exit_part_y);
+  const unsigned int thresh_exit_part[MAX_MB_PLANE] = { thresh_exit_part_y,
+                                                        thresh_exit_part_uv,
+                                                        thresh_exit_part_uv };
+  const YV12_BUFFER_CONFIG *const yv12 = get_ref_frame_yv12_buf(cm, LAST_FRAME);
+  const struct scale_factors *const sf =
+      get_ref_scale_factors_const(cm, LAST_FRAME);
+
+  struct buf_2d yv12_mb[MAX_MB_PLANE];
+  av1_setup_pred_block(xd, yv12_mb, yv12, sf, sf, num_planes);
+
+  for (int plane = 0; plane < num_planes; ++plane) {
+    const struct macroblock_plane *const p = &x->plane[plane];
+    const struct macroblockd_plane *const pd = &xd->plane[plane];
+    const BLOCK_SIZE bs =
+        get_plane_block_size(bsize, pd->subsampling_x, pd->subsampling_y);
+    const unsigned int plane_sad = cpi->ppi->fn_ptr[bs].sdf(
+        p->src.buf, p->src.stride, yv12_mb[plane].buf, yv12_mb[plane].stride);
+    assert(plane < MAX_MB_PLANE);
+    if (plane_sad >= thresh_exit_part[plane]) return 0;
+  }
+  return 1;
+}
+
 /*!\brief Top level function to pick block mode for non-RD optimized case
  *
  * \ingroup partition_search
@@ -2168,7 +2208,7 @@ static void encode_b_nonrd(const AV1_COMP *const cpi, TileDataEnc *tile_data,
  * \param[in]    ctx            Pointer to structure holding coding contexts and
  *                              chosen modes for the current block
  *
- * \return Nothing is returned. Instead, the chosen modes and contexts necessary
+ * \remark Nothing is returned. Instead, the chosen modes and contexts necessary
  * for reconstruction are stored in ctx, the rate-distortion stats are stored in
  * rd_cost. If no valid mode leading to rd_cost <= best_rd, the status will be
  * signalled by an INT64_MAX rd_cost->rdcost.
@@ -2215,7 +2255,11 @@ static void pick_sb_modes_nonrd(AV1_COMP *const cpi, TileDataEnc *tile_data,
     p[i].txb_entropy_ctx = ctx->txb_entropy_ctx[i];
   }
   for (i = 0; i < 2; ++i) pd[i].color_index_map = ctx->color_index_map[i];
-  if (!x->force_zeromv_skip) {
+
+  x->force_zeromv_skip_for_blk =
+      get_force_zeromv_skip_flag_for_blk(cpi, x, bsize);
+
+  if (!x->force_zeromv_skip_for_blk) {
     x->source_variance = av1_get_perpixel_variance_facade(
         cpi, xd, &x->plane[0].src, bsize, AOM_PLANE_Y);
   }
@@ -2253,6 +2297,12 @@ static void pick_sb_modes_nonrd(AV1_COMP *const cpi, TileDataEnc *tile_data,
 #endif
   }
   if (cpi->sf.rt_sf.skip_cdef_sb) {
+    // cdef_strength is initialized to 1 which means skip_cdef, and is updated
+    // here. Check to see is skipping cdef is allowed.
+    const int allow_cdef_skipping =
+        cpi->rc.frames_since_key > 10 && !cpi->rc.high_source_sad &&
+        !(x->color_sensitivity[0] || x->color_sensitivity[1]);
+
     // Find the corresponding 64x64 block. It'll be the 128x128 block if that's
     // the block size.
     const int mi_row_sb = mi_row - mi_row % MI_SIZE_64X64;
@@ -2262,12 +2312,11 @@ static void pick_sb_modes_nonrd(AV1_COMP *const cpi, TileDataEnc *tile_data,
         get_mi_grid_idx(&cm->mi_params, mi_row_sb, mi_col_sb);
     // Do not skip if intra or new mv is picked, or color sensitivity is set.
     // Never skip on slide/scene change.
-    mi_sb[0]->skip_cdef_curr_sb =
-        mi_sb[0]->skip_cdef_curr_sb && !cpi->rc.high_source_sad &&
-        !(x->color_sensitivity[0] || x->color_sensitivity[1]) &&
+    mi_sb[0]->cdef_strength =
+        mi_sb[0]->cdef_strength && allow_cdef_skipping &&
         !(mbmi->mode < INTRA_MODES || mbmi->mode == NEWMV);
     // Store in the pickmode context.
-    ctx->mic.skip_cdef_curr_sb = mi_sb[0]->skip_cdef_curr_sb;
+    ctx->mic.cdef_strength = mi_sb[0]->cdef_strength;
   }
   x->rdmult = orig_rdmult;
   ctx->rd_stats.rate = rd_cost->rate;
@@ -2495,7 +2544,7 @@ MI_SIZE
 * \param[in]    pc_tree   Pointer to the PC_TREE node holding the picked
 partitions and mode info for the current block
 *
-* \return Nothing is returned. The pc_tree struct is modified to store the
+* \remark Nothing is returned. The pc_tree struct is modified to store the
 * picked partition and modes.
 */
 void av1_nonrd_use_partition(AV1_COMP *cpi, ThreadData *td,

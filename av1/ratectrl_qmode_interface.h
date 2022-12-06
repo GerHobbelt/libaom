@@ -39,9 +39,6 @@ struct RateControlParam {
   int ref_frame_table_size;
   // Maximum number of references a single frame may use.
   int max_ref_frames;
-  // Maximum pyramid depth. e.g., 1 means only one ARF per GOP,
-  // 2 would allow an additional level of intermediate ARFs.
-  int max_depth;
 
   int base_q_index;
 
@@ -248,6 +245,12 @@ struct TplGopStats {
   std::vector<TplFrameStats> frame_stats_list;
 };
 
+// Structure and TPL stats for a single GOP, to be used for lookahead.
+struct LookaheadStats {
+  const GopStruct *gop_struct;       // Not owned, may not be nullptr.
+  const TplGopStats *tpl_gop_stats;  // Not owned, may not be nullptr.
+};
+
 class AV1RateControlQModeInterface {
  public:
   AV1RateControlQModeInterface();
@@ -256,14 +259,21 @@ class AV1RateControlQModeInterface {
   virtual Status SetRcParam(const RateControlParam &rc_param) = 0;
   virtual StatusOr<GopStructList> DetermineGopInfo(
       const FirstpassInfo &firstpass_info) = 0;
-  // Accept firstpass and TPL info from the encoder and return q index and
-  // rdmult. This needs to be called with consecutive GOPs as returned by
-  // DetermineGopInfo.
+
+  // Accepts GOP structure and TPL info from the encoder and returns q index and
+  // rdmult for each frame. This should be called with consecutive GOPs as
+  // returned by DetermineGopInfo.
+  //
+  // GOP structure and TPL info from zero or more subsequent GOPs may optionally
+  // be passed in lookahead_stats.
+  //
   // For the first GOP, a default-constructed RefFrameTable may be passed in as
   // ref_frame_table_snapshot_init; for subsequent GOPs, it should be the
   // final_snapshot returned on the previous call.
+  //
   virtual StatusOr<GopEncodeInfo> GetGopEncodeInfo(
       const GopStruct &gop_struct, const TplGopStats &tpl_gop_stats,
+      const std::vector<LookaheadStats> &lookahead_stats,
       const RefFrameTable &ref_frame_table_snapshot_init) = 0;
 };
 }  // namespace aom

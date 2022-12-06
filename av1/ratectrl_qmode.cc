@@ -68,7 +68,7 @@ void SetGopFrameByType(GopFrameType gop_frame_type, GopFrame *gop_frame) {
       gop_frame->is_key_frame = 0;
       gop_frame->is_arf_frame = 1;
       gop_frame->is_show_frame = 0;
-      gop_frame->is_golden_frame = 0;
+      gop_frame->is_golden_frame = gop_frame->layer_depth <= 2 ? 1 : 0;
       gop_frame->encode_ref_mode = EncodeRefMode::kRegular;
       break;
     case GopFrameType::kRegularLeaf:
@@ -106,10 +106,10 @@ GopFrame GopFrameBasic(int global_coding_idx_offset,
   gop_frame.display_idx = display_idx;
   gop_frame.global_coding_idx = global_coding_idx_offset + coding_idx;
   gop_frame.global_order_idx = global_order_idx_offset + order_idx;
-  SetGopFrameByType(gop_frame_type, &gop_frame);
+  gop_frame.layer_depth = depth + kLayerDepthOffset;
   gop_frame.colocated_ref_idx = -1;
   gop_frame.update_ref_idx = -1;
-  gop_frame.layer_depth = depth + kLayerDepthOffset;
+  SetGopFrameByType(gop_frame_type, &gop_frame);
   return gop_frame;
 }
 
@@ -201,13 +201,13 @@ GopStruct ConstructGop(RefFrameManager *ref_frame_manager, int show_frame_count,
     ref_frame_manager->UpdateRefFrameTable(&gop_frame);
     gop_struct.gop_frame_list.push_back(gop_frame);
     ConstructGopMultiLayer(&gop_struct, ref_frame_manager,
-                           ref_frame_manager->ForwardMaxSize(), arf_depth + 1,
+                           ref_frame_manager->MaxRefFrame() - 1, arf_depth + 1,
                            order_start, order_end);
     // Overlay
     gop_frame =
         GopFrameBasic(global_coding_idx_offset, global_order_idx_offset,
                       static_cast<int>(gop_struct.gop_frame_list.size()),
-                      order_end, ref_frame_manager->ForwardMaxSize(),
+                      order_end, ref_frame_manager->MaxRefFrame() - 1,
                       gop_struct.display_tracker, GopFrameType::kOverlay);
     ref_frame_manager->UpdateRefFrameTable(&gop_frame);
     gop_struct.gop_frame_list.push_back(gop_frame);
@@ -247,11 +247,6 @@ Status AV1RateControlQMode::SetRcParam(const RateControlParam &rc_param) {
   if (rc_param.max_ref_frames < 1 || rc_param.max_ref_frames > 7) {
     error_message << "max_ref_frames (" << rc_param.max_ref_frames
                   << ") must be in the range [1, 7].";
-    return { AOM_CODEC_INVALID_PARAM, error_message.str() };
-  }
-  if (rc_param.max_depth < 1 || rc_param.max_depth > 5) {
-    error_message << "max_depth (" << rc_param.max_depth
-                  << ") must be in the range [1, 5].";
     return { AOM_CODEC_INVALID_PARAM, error_message.str() };
   }
   if (rc_param.base_q_index < 0 || rc_param.base_q_index > 255) {
@@ -854,7 +849,8 @@ StatusOr<GopStructList> AV1RateControlQMode::DetermineGopInfo(
     const FirstpassInfo &firstpass_info) {
   const int stats_size = static_cast<int>(firstpass_info.stats_list.size());
   GopStructList gop_list;
-  RefFrameManager ref_frame_manager(rc_param_.ref_frame_table_size);
+  RefFrameManager ref_frame_manager(rc_param_.ref_frame_table_size,
+                                    rc_param_.max_ref_frames);
 
   int global_coding_idx_offset = 0;
   int global_order_idx_offset = 0;
@@ -1153,7 +1149,9 @@ void TplFrameDepStatsPropagate(int coding_idx,
 }
 
 std::vector<RefFrameTable> AV1RateControlQMode::GetRefFrameTableList(
-    const GopStruct &gop_struct, RefFrameTable ref_frame_table) {
+    const GopStruct &gop_struct,
+    const std::vector<LookaheadStats> &lookahead_stats,
+    RefFrameTable ref_frame_table) {
   if (gop_struct.global_coding_idx_offset == 0) {
     // For the first GOP, ref_frame_table need not be initialized. This is fine,
     // because the first frame (a key frame) will fully initialize it.
@@ -1180,14 +1178,46 @@ std::vector<RefFrameTable> AV1RateControlQMode::GetRefFrameTableList(
     }
     ref_frame_table_list.push_back(ref_frame_table);
   }
+
+  int gop_size_offset = static_cast<int>(gop_struct.gop_frame_list.size());
+
+  for (const auto &lookahead_stat : lookahead_stats) {
+    for (GopFrame gop_frame : lookahead_stat.gop_struct->gop_frame_list) {
+      if (gop_frame.is_key_frame) {
+        ref_frame_table.assign(rc_param_.ref_frame_table_size, gop_frame);
+      } else if (gop_frame.update_ref_idx != -1) {
+        assert(gop_frame.update_ref_idx <
+               static_cast<int>(ref_frame_table.size()));
+        gop_frame.coding_idx += gop_size_offset;
+        ref_frame_table[gop_frame.update_ref_idx] = gop_frame;
+      }
+      ref_frame_table_list.push_back(ref_frame_table);
+    }
+    gop_size_offset +=
+        static_cast<int>(lookahead_stat.gop_struct->gop_frame_list.size());
+  }
+
   return ref_frame_table_list;
 }
 
 StatusOr<TplGopDepStats> ComputeTplGopDepStats(
     const TplGopStats &tpl_gop_stats,
+    const std::vector<LookaheadStats> &lookahead_stats,
     const std::vector<RefFrameTable> &ref_frame_table_list) {
+  std::vector<const TplFrameStats *> tpl_frame_stats_list_with_lookahead;
+  for (const auto &tpl_frame_stats : tpl_gop_stats.frame_stats_list) {
+    tpl_frame_stats_list_with_lookahead.push_back(&tpl_frame_stats);
+  }
+  for (auto &lookahead_stat : lookahead_stats) {
+    for (const auto &tpl_frame_stats :
+         lookahead_stat.tpl_gop_stats->frame_stats_list) {
+      tpl_frame_stats_list_with_lookahead.push_back(&tpl_frame_stats);
+    }
+  }
+
   const int frame_count =
-      static_cast<int>(tpl_gop_stats.frame_stats_list.size());
+      static_cast<int>(tpl_frame_stats_list_with_lookahead.size());
+
   // Create the struct to store TPL dependency stats
   TplGopDepStats tpl_gop_dep_stats;
 
@@ -1195,7 +1225,7 @@ StatusOr<TplGopDepStats> ComputeTplGopDepStats(
   for (int coding_idx = 0; coding_idx < frame_count; coding_idx++) {
     const StatusOr<TplFrameDepStats> tpl_frame_dep_stats =
         CreateTplFrameDepStatsWithoutPropagation(
-            tpl_gop_stats.frame_stats_list[coding_idx]);
+            *tpl_frame_stats_list_with_lookahead[coding_idx]);
     if (!tpl_frame_dep_stats.ok()) {
       return tpl_frame_dep_stats.status();
     }
@@ -1231,19 +1261,28 @@ static int GetRDMult(const GopFrame &gop_frame, int qindex) {
 
 StatusOr<GopEncodeInfo> AV1RateControlQMode::GetGopEncodeInfo(
     const GopStruct &gop_struct, const TplGopStats &tpl_gop_stats,
+    const std::vector<LookaheadStats> &lookahead_stats,
     const RefFrameTable &ref_frame_table_snapshot_init) {
   Status status = ValidateTplStats(gop_struct, tpl_gop_stats);
   if (!status.ok()) {
     return status;
   }
 
-  const std::vector<RefFrameTable> ref_frame_table_list =
-      GetRefFrameTableList(gop_struct, ref_frame_table_snapshot_init);
+  for (auto &lookahead_stat : lookahead_stats) {
+    Status status = ValidateTplStats(*lookahead_stat.gop_struct,
+                                     *lookahead_stat.tpl_gop_stats);
+    if (!status.ok()) {
+      return status;
+    }
+  }
+
+  const std::vector<RefFrameTable> ref_frame_table_list = GetRefFrameTableList(
+      gop_struct, lookahead_stats, ref_frame_table_snapshot_init);
 
   GopEncodeInfo gop_encode_info;
   gop_encode_info.final_snapshot = ref_frame_table_list.back();
-  StatusOr<TplGopDepStats> gop_dep_stats =
-      ComputeTplGopDepStats(tpl_gop_stats, ref_frame_table_list);
+  StatusOr<TplGopDepStats> gop_dep_stats = ComputeTplGopDepStats(
+      tpl_gop_stats, lookahead_stats, ref_frame_table_list);
   if (!gop_dep_stats.ok()) {
     return gop_dep_stats.status();
   }
