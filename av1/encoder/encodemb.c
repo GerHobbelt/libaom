@@ -43,7 +43,7 @@ void av1_subtract_block(BitDepthInfo bd_info, int rows, int cols, int16_t *diff,
 #if CONFIG_AV1_HIGHBITDEPTH
   if (bd_info.use_highbitdepth_buf) {
     aom_highbd_subtract_block(rows, cols, diff, diff_stride, src8, src_stride,
-                              pred8, pred_stride, bd_info.bit_depth);
+                              pred8, pred_stride);
     return;
   }
 #endif
@@ -167,7 +167,8 @@ void av1_dropout_qcoeff_num(MACROBLOCK *mb, int plane, int block,
   const SCAN_ORDER *const scan_order = get_scan(tx_size, tx_type);
 
   // Early return if there are not enough non-zero coefficients.
-  if (p->eobs[block] == 0 || p->eobs[block] <= dropout_num_before) {
+  if (p->eobs[block] == 0 || p->eobs[block] <= dropout_num_before ||
+      max_eob <= dropout_num_before + dropout_num_after) {
     return;
   }
 

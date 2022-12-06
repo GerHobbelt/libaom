@@ -21,19 +21,92 @@
 
 namespace aom {
 
-GopStruct construct_gop(RefFrameManager *ref_frame_manager,
-                        int show_frame_count, bool has_key_frame);
+constexpr int kLayerDepthOffset = 1;
+constexpr int kMinIntervalToAddArf = 3;
+constexpr int kMinArfInterval = (kMinIntervalToAddArf + 1) / 2;
+
+struct TplUnitDepStats {
+  double propagation_cost;
+  double intra_cost;
+  double inter_cost;
+  std::array<MotionVector, kBlockRefCount> mv;
+  std::array<int, kBlockRefCount> ref_frame_index;
+};
+
+struct TplFrameDepStats {
+  int unit_size;  // equivalent to min_block_size
+  std::vector<std::vector<TplUnitDepStats>> unit_stats;
+};
+
+struct TplGopDepStats {
+  std::vector<TplFrameDepStats> frame_dep_stats_list;
+};
+
+GopFrame GopFrameInvalid();
+
+// gop frame type used for facilitate setting up GopFrame
+// TODO(angiebird): Define names for forward key frame and
+// key frame with overlay
+enum class GopFrameType {
+  kRegularKey,  // High quality key frame without overlay
+  kRegularArf,  // High quality arf with strong filtering followed by an overlay
+                // later
+  kIntermediateArf,  // Good quality arf with weak or no filtering followed by a
+                     // show_existing later
+  kRegularLeaf,      // Regular leaf frame
+  kShowExisting,     // Show_existing frame
+  kOverlay           // Overlay frame
+};
+
+// Set up is_key_frame, is_arf_frame, is_show_frame, is_golden_frame and
+// encode_ref_mode in GopFrame based on gop_frame_type
+void SetGopFrameByType(GopFrameType gop_frame_type, GopFrame *gop_frame);
+
+GopFrame GopFrameBasic(int global_coding_idx_offset,
+                       int global_order_idx_offset, int coding_idx,
+                       int order_idx, int depth, GopFrameType gop_frame_type);
+
+GopStruct ConstructGop(RefFrameManager *ref_frame_manager, int show_frame_count,
+                       bool has_key_frame, int global_coding_idx_offset,
+                       int global_order_idx_offset);
+
+TplFrameDepStats CreateTplFrameDepStats(int frame_height, int frame_width,
+                                        int min_block_size);
+
+TplUnitDepStats TplBlockStatsToDepStats(const TplBlockStats &block_stats,
+                                        int unit_count);
+
+TplFrameDepStats CreateTplFrameDepStatsWithoutPropagation(
+    const TplFrameStats &frame_stats);
+
+std::vector<int> GetKeyFrameList(const FirstpassInfo &first_pass_info);
+
+double TplFrameDepStatsAccumulateIntraCost(
+    const TplFrameDepStats &frame_dep_stats);
+
+double TplFrameDepStatsAccumulate(const TplFrameDepStats &frame_dep_stats);
+
+void TplFrameDepStatsPropagate(int coding_idx,
+                               const RefFrameTable &ref_frame_table,
+                               TplGopDepStats *tpl_gop_dep_stats);
+
+int GetBlockOverlapArea(int r0, int c0, int r1, int c1, int size);
+
+TplGopDepStats ComputeTplGopDepStats(
+    const TplGopStats &tpl_gop_stats,
+    const std::vector<RefFrameTable> &ref_frame_table_list);
 
 class AV1RateControlQMode : public AV1RateControlQModeInterface {
  public:
   void SetRcParam(const RateControlParam &rc_param) override;
   GopStructList DetermineGopInfo(const FirstpassInfo &firstpass_info) override;
-  virtual std::vector<FrameEncodeParameters> GetGopEncodeInfo(
-      const TplGopStats &tpl_stats_list) override;
+  GopEncodeInfo GetGopEncodeInfo(
+      const GopStruct &gop_struct, const TplGopStats &tpl_gop_stats,
+      const RefFrameTable &ref_frame_table_snapshot) override;
 
  private:
   RateControlParam rc_param_;
 };
 }  // namespace aom
 
-#endif
+#endif  // AOM_AV1_RATECTRL_QMODE_H_

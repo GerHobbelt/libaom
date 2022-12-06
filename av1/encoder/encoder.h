@@ -27,6 +27,7 @@
 #include "av1/common/blockd.h"
 #include "av1/common/entropymode.h"
 #include "av1/common/enums.h"
+#include "av1/common/reconintra.h"
 #include "av1/common/resize.h"
 #include "av1/common/thread_common.h"
 #include "av1/common/timing.h"
@@ -1504,15 +1505,16 @@ typedef struct {
   /**@}*/
 } AV1EncRowMultiThreadInfo;
 
+/*!
+ * \brief Max number of recodes used to track the frame probabilities.
+ */
+#define NUM_RECODES_PER_FRAME 10
+
 #if CONFIG_FRAME_PARALLEL_ENCODE
 /*!
  * \brief Max number of frames that can be encoded in a parallel encode set.
  */
 #define MAX_PARALLEL_FRAMES 4
-/*!
- * \brief Max number of recodes used to track the frame probabilities.
- */
-#define NUM_RECODES_PER_FRAME 10
 
 /*!
  * \brief Buffers to be backed up during parallel encode set to be restored
@@ -2376,30 +2378,10 @@ typedef struct AV1_PRIMARY {
   struct AV1_COMP *parallel_cpi[MAX_PARALLEL_FRAMES];
 
   /*!
-   * Number of frame level contexts(cpis)
-   */
-  int num_fp_contexts;
-
-  /*!
    * Array of structures to hold data of frames encoded in a given parallel
    * encode set.
    */
   struct AV1_COMP_DATA parallel_frames_data[MAX_PARALLEL_FRAMES - 1];
-
-  /*!
-   * Loopfilter levels of the previous encoded frame.
-   */
-  int filter_level[2];
-
-  /*!
-   * Chrominance component loopfilter level of the previous encoded frame.
-   */
-  int filter_level_u;
-
-  /*!
-   * Chrominance component loopfilter level of the previous encoded frame.
-   */
-  int filter_level_v;
 
 #if CONFIG_FPMT_TEST
   /*!
@@ -2427,6 +2409,15 @@ typedef struct AV1_PRIMARY {
    */
   int temp_valid_gm_model_found[FRAME_UPDATE_TYPES];
 #endif
+#if CONFIG_FRAME_PARALLEL_ENCODE_2
+  /*!
+   * Copy of cm->ref_frame_map maintained to facilitate sequential update of
+   * ref_frame_map by lower layer depth frames encoded ahead of time in a
+   * parallel encode set.
+   */
+  RefCntBuffer *ref_frame_map_copy[REF_FRAMES];
+#endif  // CONFIG_FRAME_PARALLEL_ENCODE_2
+#endif  // CONFIG_FRAME_PARALLEL_ENCODE
 
   /*!
    * Start time stamp of the last encoded show frame
@@ -2437,15 +2428,27 @@ typedef struct AV1_PRIMARY {
    * End time stamp of the last encoded show frame
    */
   int64_t ts_end_last_show_frame;
-#if CONFIG_FRAME_PARALLEL_ENCODE_2
+
   /*!
-   * Copy of cm->ref_frame_map maintained to facilitate sequential update of
-   * ref_frame_map by lower layer depth frames encoded ahead of time in a
-   * parallel encode set.
+   * Number of frame level contexts(cpis)
    */
-  RefCntBuffer *ref_frame_map_copy[REF_FRAMES];
-#endif  // CONFIG_FRAME_PARALLEL_ENCODE_2
-#endif  // CONFIG_FRAME_PARALLEL_ENCODE
+  int num_fp_contexts;
+
+  /*!
+   * Loopfilter levels of the previous encoded frame.
+   */
+  int filter_level[2];
+
+  /*!
+   * Chrominance component loopfilter level of the previous encoded frame.
+   */
+  int filter_level_u;
+
+  /*!
+   * Chrominance component loopfilter level of the previous encoded frame.
+   */
+  int filter_level_v;
+
   /*!
    * Encode stage top level structure
    * When CONFIG_FRAME_PARALLEL_ENCODE is enabled this is the same as
@@ -2984,7 +2987,6 @@ typedef struct AV1_COMP {
    */
   VarBasedPartitionInfo vbp_info;
 
-#if CONFIG_FRAME_PARALLEL_ENCODE
   /*!
    * Number of recodes in the frame.
    */
@@ -3015,7 +3017,7 @@ typedef struct AV1_COMP {
    */
   int do_update_frame_probs_interpfilter[NUM_RECODES_PER_FRAME];
 
-#if CONFIG_FPMT_TEST
+#if CONFIG_FRAME_PARALLEL_ENCODE && CONFIG_FPMT_TEST
   /*!
    * Temporary variable for simulation.
    * Previous frame's framerate.
@@ -3028,7 +3030,6 @@ typedef struct AV1_COMP {
    * post encode updates for parallel frames.
    */
   double new_framerate;
-#endif
 
   /*!
    * Retain condition for fast_extra_bits calculation.
@@ -3229,20 +3230,12 @@ typedef struct AV1_COMP {
    */
   ExtPartController ext_part_controller;
 
-#if CONFIG_FRAME_PARALLEL_ENCODE
-  /*!
-   * A flag to indicate frames that will update their data to the primary
-   * context at the end of the encode. It is set for non-parallel frames and the
-   * last frame in encode order in a given parallel encode set.
-   */
-  bool do_frame_data_update;
-
   /*!
    * Motion vector stats of the current encoded frame, used to update the
    * ppi->mv_stats during postencode.
    */
   MV_STATS mv_stats;
-#if CONFIG_FRAME_PARALLEL_ENCODE_2
+#if CONFIG_FRAME_PARALLEL_ENCODE && CONFIG_FRAME_PARALLEL_ENCODE_2
   /*!
    * Stores the reference refresh index for the current frame.
    */
@@ -3269,8 +3262,15 @@ typedef struct AV1_COMP {
 
   int wanted_fb;
 #endif
-#endif  // CONFIG_FRAME_PARALLEL_ENCODE_2
-#endif  // CONFIG_FRAME_PARALLEL_ENCODE
+#endif  // CONFIG_FRAME_PARALLEL_ENCODE && CONFIG_FRAME_PARALLEL_ENCODE_2
+
+  /*!
+   * A flag to indicate frames that will update their data to the primary
+   * context at the end of the encode. It is set for non-parallel frames and the
+   * last frame in encode order in a given parallel encode set.
+   */
+  bool do_frame_data_update;
+
 #if CONFIG_RD_COMMAND
   /*!
    *  A structure for assigning external q_index / rdmult for experiments
@@ -3310,6 +3310,13 @@ typedef struct AV1_COMP {
   VBR_RATECTRL_INFO vbr_rc_info;
 #endif
 
+#if CONFIG_RATECTRL_LOG
+  /*!
+   * Structure stores information of rate control decisions.
+   */
+  RATECTRL_LOG rc_log;
+#endif  // CONFIG_RATECTRL_LOG
+
   /*!
    * Frame level twopass status and control data
    */
@@ -3324,6 +3331,11 @@ typedef struct AV1_COMP {
    * File pointer to second pass log
    */
   FILE *second_pass_log_stream;
+
+  /*!
+   * Buffer to store 64x64 SAD
+   */
+  uint64_t *src_sad_blk_64x64;
 } AV1_COMP;
 
 /*!
@@ -3398,17 +3410,17 @@ typedef struct {
   size_t size;  // Size of resulting bitstream
 } EncodeFrameResults;
 
-// Must not be called more than once.
-void av1_initialize_enc(void);
+void av1_initialize_enc(unsigned int usage, enum aom_rc_mode end_usage);
 
-struct AV1_COMP *av1_create_compressor(AV1_PRIMARY *ppi, AV1EncoderConfig *oxcf,
+struct AV1_COMP *av1_create_compressor(AV1_PRIMARY *ppi,
+                                       const AV1EncoderConfig *oxcf,
                                        BufferPool *const pool,
                                        COMPRESSOR_STAGE stage,
                                        int lap_lag_in_frames);
 
 struct AV1_PRIMARY *av1_create_primary_compressor(
     struct aom_codec_pkt_list *pkt_list_head, int num_lap_buffers,
-    AV1EncoderConfig *oxcf);
+    const AV1EncoderConfig *oxcf);
 
 void av1_remove_compressor(AV1_COMP *cpi);
 
@@ -3731,6 +3743,12 @@ static INLINE int is_stat_consumption_stage(const AV1_COMP *const cpi) {
            (cpi->compressor_stage == ENCODE_STAGE) && cpi->ppi->lap_enabled));
 }
 
+// Decide whether 'dv_costs' need to be allocated/stored during the encoding.
+static AOM_INLINE bool av1_need_dv_costs(const AV1_COMP *const cpi) {
+  return !cpi->sf.rt_sf.use_nonrd_pick_mode &&
+         av1_allow_intrabc(&cpi->common) && !is_stat_generation_stage(cpi);
+}
+
 /*!\endcond */
 /*!\brief Check if the current stage has statistics
  *
@@ -3973,6 +3991,12 @@ static INLINE int is_frame_resize_pending(AV1_COMP *const cpi) {
 static INLINE int is_restoration_used(const AV1_COMMON *const cm) {
   return cm->seq_params->enable_restoration && !cm->features.all_lossless &&
          !cm->tiles.large_scale;
+}
+
+static INLINE int is_inter_tx_size_search_level_one(
+    const TX_SPEED_FEATURES *tx_sf) {
+  return (tx_sf->inter_tx_size_search_init_depth_rect >= 1 &&
+          tx_sf->inter_tx_size_search_init_depth_sqr >= 1);
 }
 
 #if CONFIG_AV1_TEMPORAL_DENOISING

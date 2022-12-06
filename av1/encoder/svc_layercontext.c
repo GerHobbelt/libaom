@@ -70,8 +70,7 @@ void av1_init_layer_context(AV1_COMP *const cpi) {
         lc->counter_encode_maxq_scene_change = 0;
         if (lc->map) aom_free(lc->map);
         CHECK_MEM_ERROR(cm, lc->map,
-                        aom_malloc(mi_rows * mi_cols * sizeof(*lc->map)));
-        memset(lc->map, 0, mi_rows * mi_cols);
+                        aom_calloc(mi_rows * mi_cols, sizeof(*lc->map)));
       }
     }
     svc->downsample_filter_type[sl] = BILINEAR;
@@ -166,6 +165,13 @@ void av1_update_temporal_layer_framerate(AV1_COMP *const cpi) {
   }
 }
 
+static AOM_INLINE bool check_ref_is_low_spatial_res_super_frame(
+    int ref_frame, const SVC *svc) {
+  int ref_frame_idx = svc->ref_idx[ref_frame - 1];
+  return svc->buffer_time_index[ref_frame_idx] == svc->current_superframe &&
+         svc->buffer_spatial_layer[ref_frame_idx] <= svc->spatial_layer_id - 1;
+}
+
 void av1_restore_layer_context(AV1_COMP *const cpi) {
   SVC *const svc = &cpi->svc;
   const AV1_COMMON *const cm = &cpi->common;
@@ -196,19 +202,21 @@ void av1_restore_layer_context(AV1_COMP *const cpi) {
   }
   svc->skip_mvsearch_last = 0;
   svc->skip_mvsearch_gf = 0;
+  svc->skip_mvsearch_altref = 0;
   // For each reference (LAST/GOLDEN) set the skip_mvsearch_last/gf frame flags.
   // This is to skip searching mv for that reference if it was last
   // refreshed (i.e., buffer slot holding that reference was refreshed) on the
   // previous spatial layer(s) at the same time (current_superframe).
   if (svc->set_ref_frame_config && svc->force_zero_mode_spatial_ref) {
-    int ref_frame_idx = svc->ref_idx[LAST_FRAME - 1];
-    if (svc->buffer_time_index[ref_frame_idx] == svc->current_superframe &&
-        svc->buffer_spatial_layer[ref_frame_idx] <= svc->spatial_layer_id - 1)
+    if (check_ref_is_low_spatial_res_super_frame(LAST_FRAME, svc)) {
       svc->skip_mvsearch_last = 1;
-    ref_frame_idx = svc->ref_idx[GOLDEN_FRAME - 1];
-    if (svc->buffer_time_index[ref_frame_idx] == svc->current_superframe &&
-        svc->buffer_spatial_layer[ref_frame_idx] <= svc->spatial_layer_id - 1)
+    }
+    if (check_ref_is_low_spatial_res_super_frame(GOLDEN_FRAME, svc)) {
       svc->skip_mvsearch_gf = 1;
+    }
+    if (check_ref_is_low_spatial_res_super_frame(ALTREF_FRAME, svc)) {
+      svc->skip_mvsearch_altref = 1;
+    }
   }
 }
 
@@ -265,22 +273,18 @@ void av1_save_layer_context(AV1_COMP *const cpi) {
 int av1_svc_primary_ref_frame(const AV1_COMP *const cpi) {
   const SVC *const svc = &cpi->svc;
   const AV1_COMMON *const cm = &cpi->common;
-  int wanted_fb = -1;
+  int fb_idx = -1;
   int primary_ref_frame = PRIMARY_REF_NONE;
-  for (unsigned int i = 0; i < REF_FRAMES; i++) {
-    if (svc->spatial_layer_fb[i] == svc->spatial_layer_id &&
-        svc->temporal_layer_fb[i] == svc->temporal_layer_id) {
-      wanted_fb = i;
-      break;
-    }
-  }
-  if (wanted_fb != -1) {
-    for (int ref_frame = LAST_FRAME; ref_frame <= ALTREF_FRAME; ref_frame++) {
-      if (get_ref_frame_map_idx(cm, ref_frame) == wanted_fb) {
-        primary_ref_frame = ref_frame - LAST_FRAME;
-        break;
-      }
-    }
+  // Set the primary_ref_frame to LAST_FRAME if that buffer slot for LAST
+  // was last updated on a lower temporal layer (or base TL0) and for the
+  // same spatial layer. For RTC patterns this allows for continued decoding
+  // when set of enhancement layers are dropped (continued decoding starting
+  // at next base TL0), so error_resilience can be off/0 for all layers.
+  fb_idx = get_ref_frame_map_idx(cm, LAST_FRAME);
+  if (svc->spatial_layer_fb[fb_idx] == svc->spatial_layer_id &&
+      (svc->temporal_layer_fb[fb_idx] < svc->temporal_layer_id ||
+       svc->temporal_layer_fb[fb_idx] == 0)) {
+    primary_ref_frame = 0;  // LAST_FRAME
   }
   return primary_ref_frame;
 }

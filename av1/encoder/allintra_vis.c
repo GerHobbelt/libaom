@@ -242,7 +242,6 @@ static BLOCK_SIZE pick_block_size(AV1_COMP *cpi,
   const int use_hbd = cpi->source->flags & YV12_FLAG_HIGHBITDEPTH;
 
   double vote = 0.0;
-  int sb_count = 0;
   for (int mi_row = 0; mi_row < cpi->frame_info.mi_rows; mi_row += mb_step) {
     for (int mi_col = 0; mi_col < cpi->frame_info.mi_cols; mi_col += mb_step) {
       const uint8_t *mb_buffer =
@@ -293,7 +292,6 @@ static BLOCK_SIZE pick_block_size(AV1_COMP *cpi,
       } else {
         vote += 1.0;
       }
-      ++sb_count;
     }
   }
 
@@ -307,7 +305,7 @@ static int64_t pick_norm_factor_and_block_size(AV1_COMP *const cpi,
   BLOCK_SIZE last_block_size;
   BLOCK_SIZE this_block_size = sb_size;
   *best_block_size = sb_size;
-  // Pick from block size 64x64, 32x32 and 16x16.
+  // Pick from block size 128x128, 64x64, 32x32 and 16x16.
   do {
     last_block_size = this_block_size;
     assert(this_block_size >= BLOCK_16X16 && this_block_size <= BLOCK_128X128);
@@ -319,7 +317,7 @@ static int64_t pick_norm_factor_and_block_size(AV1_COMP *const cpi,
 
   int64_t norm_factor = 1;
   const BLOCK_SIZE norm_block_size = this_block_size;
-  assert(norm_block_size >= BLOCK_16X16 && norm_block_size <= BLOCK_64X64);
+  assert(norm_block_size >= BLOCK_16X16 && norm_block_size <= BLOCK_128X128);
   const int norm_step = mi_size_wide[norm_block_size];
   double sb_wiener_log = 0;
   double sb_count = 0;
@@ -384,7 +382,7 @@ void av1_set_mb_wiener_variance(AV1_COMP *cpi) {
           &cm->cur_frame->buf, cm->width, cm->height, seq_params->subsampling_x,
           seq_params->subsampling_y, seq_params->use_highbitdepth,
           cpi->oxcf.border_in_pixels, cm->features.byte_alignment, NULL, NULL,
-          NULL, cpi->oxcf.tool_cfg.enable_global_motion))
+          NULL, cpi->oxcf.tool_cfg.enable_global_motion, 0))
     aom_internal_error(cm->error, AOM_CODEC_MEM_ERROR,
                        "Failed to allocate frame buffer");
 

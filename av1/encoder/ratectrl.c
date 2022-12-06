@@ -19,6 +19,7 @@
 #include "aom_dsp/aom_dsp_common.h"
 #include "aom_mem/aom_mem.h"
 #include "aom_ports/mem.h"
+#include "aom_ports/aom_once.h"
 
 #include "av1/common/alloccommon.h"
 #include "av1/encoder/aq_cyclicrefresh.h"
@@ -129,7 +130,7 @@ static void init_minq_luts(int *kf_low_m, int *kf_high_m, int *arfgf_low,
   }
 }
 
-void av1_rc_init_minq_luts(void) {
+static void rc_init_minq_luts(void) {
   init_minq_luts(kf_low_motion_minq_8, kf_high_motion_minq_8,
                  arfgf_low_motion_minq_8, arfgf_high_motion_minq_8,
                  inter_minq_8, rtc_minq_8, AOM_BITS_8);
@@ -140,6 +141,8 @@ void av1_rc_init_minq_luts(void) {
                  arfgf_low_motion_minq_12, arfgf_high_motion_minq_12,
                  inter_minq_12, rtc_minq_12, AOM_BITS_12);
 }
+
+void av1_rc_init_minq_luts(void) { aom_once(rc_init_minq_luts); }
 
 // These functions use formulaic calculations to make playing with the
 // quantizer tables easier. If necessary they can be replaced by lookup
@@ -553,7 +556,7 @@ static double get_rate_correction_factor(const AV1_COMP *cpi, int width,
   double rate_correction_factors_kfstd;
   double rate_correction_factors_gfarfstd;
   double rate_correction_factors_internormal;
-#if CONFIG_FRAME_PARALLEL_ENCODE
+
   rate_correction_factors_kfstd =
       (cpi->ppi->gf_group.frame_parallel_level[cpi->gf_frame_index] > 0)
           ? rc->frame_level_rate_correction_factors[KF_STD]
@@ -566,27 +569,16 @@ static double get_rate_correction_factor(const AV1_COMP *cpi, int width,
       (cpi->ppi->gf_group.frame_parallel_level[cpi->gf_frame_index] > 0)
           ? rc->frame_level_rate_correction_factors[INTER_NORMAL]
           : p_rc->rate_correction_factors[INTER_NORMAL];
-#else
-  rate_correction_factors_kfstd = p_rc->rate_correction_factors[KF_STD];
-  rate_correction_factors_gfarfstd = p_rc->rate_correction_factors[GF_ARF_STD];
-  rate_correction_factors_internormal =
-      p_rc->rate_correction_factors[INTER_NORMAL];
-#endif
 
   if (cpi->common.current_frame.frame_type == KEY_FRAME) {
     rcf = rate_correction_factors_kfstd;
   } else if (is_stat_consumption_stage(cpi)) {
     const RATE_FACTOR_LEVEL rf_lvl =
         get_rate_factor_level(&cpi->ppi->gf_group, cpi->gf_frame_index);
-    double rate_correction_factors_rflvl;
-#if CONFIG_FRAME_PARALLEL_ENCODE
-    rate_correction_factors_rflvl =
+    double rate_correction_factors_rflvl =
         (cpi->ppi->gf_group.frame_parallel_level[cpi->gf_frame_index] > 0)
             ? rc->frame_level_rate_correction_factors[rf_lvl]
             : p_rc->rate_correction_factors[rf_lvl];
-#else
-    rate_correction_factors_rflvl = p_rc->rate_correction_factors[rf_lvl];
-#endif
     rcf = rate_correction_factors_rflvl;
   } else {
     if ((refresh_frame->alt_ref_frame || refresh_frame->golden_frame) &&
@@ -622,9 +614,6 @@ static void set_rate_correction_factor(AV1_COMP *cpi, int is_encode_stage,
   RATE_CONTROL *const rc = &cpi->rc;
   PRIMARY_RATE_CONTROL *const p_rc = &cpi->ppi->p_rc;
   const RefreshFrameInfo *const refresh_frame = &cpi->refresh_frame;
-#if !CONFIG_FRAME_PARALLEL_ENCODE
-  (void)is_encode_stage;
-#endif
   int update_default_rcf = 1;
   // Normalize RCF to account for the size-dependent scaling factor.
   factor /= resize_rate_factor(&cpi->oxcf.frm_dim_cfg, width, height);
@@ -636,13 +625,11 @@ static void set_rate_correction_factor(AV1_COMP *cpi, int is_encode_stage,
   } else if (is_stat_consumption_stage(cpi)) {
     const RATE_FACTOR_LEVEL rf_lvl =
         get_rate_factor_level(&cpi->ppi->gf_group, cpi->gf_frame_index);
-#if CONFIG_FRAME_PARALLEL_ENCODE
     if (is_encode_stage &&
         cpi->ppi->gf_group.frame_parallel_level[cpi->gf_frame_index] > 0) {
       rc->frame_level_rate_correction_factors[rf_lvl] = factor;
       update_default_rcf = 0;
     }
-#endif
     if (update_default_rcf) p_rc->rate_correction_factors[rf_lvl] = factor;
   } else {
     if ((refresh_frame->alt_ref_frame || refresh_frame->golden_frame) &&
@@ -651,13 +638,11 @@ static void set_rate_correction_factor(AV1_COMP *cpi, int is_encode_stage,
          cpi->oxcf.rc_cfg.gf_cbr_boost_pct > 20)) {
       p_rc->rate_correction_factors[GF_ARF_STD] = factor;
     } else {
-#if CONFIG_FRAME_PARALLEL_ENCODE
       if (is_encode_stage &&
           cpi->ppi->gf_group.frame_parallel_level[cpi->gf_frame_index] > 0) {
         rc->frame_level_rate_correction_factors[INTER_NORMAL] = factor;
         update_default_rcf = 0;
       }
-#endif
       if (update_default_rcf)
         p_rc->rate_correction_factors[INTER_NORMAL] = factor;
     }
@@ -672,11 +657,6 @@ void av1_rc_update_rate_correction_factors(AV1_COMP *cpi, int is_encode_stage,
       get_rate_correction_factor(cpi, width, height);
   double adjustment_limit;
   const int MBs = av1_get_MBs(width, height);
-
-#if !CONFIG_FRAME_PARALLEL_ENCODE
-  (void)is_encode_stage;
-#endif
-
   int projected_size_based_on_q = 0;
 
   // Do not update the rate factors for arf overlay frames.
@@ -1057,6 +1037,30 @@ static int calc_active_best_quality_no_stats_cbr(const AV1_COMP *cpi,
   return active_best_quality;
 }
 
+#if RT_PASSIVE_STRATEGY
+static int get_q_passive_strategy(const AV1_COMP *const cpi,
+                                  const int q_candidate, const int threshold) {
+  const AV1_COMMON *const cm = &cpi->common;
+  const PRIMARY_RATE_CONTROL *const p_rc = &cpi->ppi->p_rc;
+  const CurrentFrame *const current_frame = &cm->current_frame;
+  int sum = 0;
+  int count = 0;
+  int i = 1;
+  while (i < MAX_Q_HISTORY) {
+    int frame_id = current_frame->frame_number - i;
+    if (frame_id <= 0) break;
+    sum += p_rc->q_history[frame_id % MAX_Q_HISTORY];
+    ++count;
+    ++i;
+  }
+  if (count > 0) {
+    const int avg_q = sum / count;
+    if (abs(avg_q - q_candidate) <= threshold) return avg_q;
+  }
+  return q_candidate;
+}
+#endif  // RT_PASSIVE_STRATEGY
+
 /*!\brief Picks q and q bounds given CBR rate control parameters in \c cpi->rc.
  *
  * Handles the special case when using:
@@ -1113,6 +1117,12 @@ static int rc_pick_q_and_bounds_no_stats_cbr(const AV1_COMP *cpi, int width,
   } else {
     q = av1_rc_regulate_q(cpi, rc->this_frame_target, active_best_quality,
                           active_worst_quality, width, height);
+#if RT_PASSIVE_STRATEGY
+    if (current_frame->frame_type != KEY_FRAME &&
+        cpi->oxcf.tune_cfg.content == AOM_CONTENT_SCREEN) {
+      q = get_q_passive_strategy(cpi, q, 50);
+    }
+#endif  // RT_PASSIVE_STRATEGY
     if (q > *top_index) {
       // Special case when we are targeting the max allowed rate
       if (rc->this_frame_target >= rc->max_frame_bandwidth)
@@ -1122,7 +1132,7 @@ static int rc_pick_q_and_bounds_no_stats_cbr(const AV1_COMP *cpi, int width,
     }
   }
   // Special case: we force the first few frames to use low q such that
-  // the these frames are encoded at a high quality, which provides good
+  // these frames are encoded at a high quality, which provides good
   // references for following frames.
   if (current_frame->frame_type != KEY_FRAME && !cpi->ppi->use_svc &&
       current_frame->frame_number >= 10 && current_frame->frame_number <= 15) {
@@ -2014,6 +2024,11 @@ void av1_rc_postencode_update(AV1_COMP *cpi, uint64_t bytes_used) {
 
   const int qindex = cm->quant_params.base_qindex;
 
+#if RT_PASSIVE_STRATEGY
+  const int frame_number = current_frame->frame_number % MAX_Q_HISTORY;
+  p_rc->q_history[frame_number] = qindex;
+#endif  // RT_PASSIVE_STRATEGY
+
   // Update rate control heuristics
   rc->projected_frame_size = (int)(bytes_used << 3);
 
@@ -2681,6 +2696,14 @@ static void rc_scene_detection_onepass_rt(AV1_COMP *cpi) {
   int last_src_ystride;
   int last_src_width;
   int last_src_height;
+  if (cm->spatial_layer_id != 0 || cm->width != cm->render_width ||
+      cm->height != cm->render_height || cpi->unscaled_source == NULL ||
+      cpi->unscaled_last_source == NULL) {
+    if (cpi->src_sad_blk_64x64) {
+      aom_free(cpi->src_sad_blk_64x64);
+      cpi->src_sad_blk_64x64 = NULL;
+    }
+  }
   if (cpi->unscaled_source == NULL || cpi->unscaled_last_source == NULL) return;
   src_y = unscaled_src->y_buffer;
   src_ystride = unscaled_src->y_stride;
@@ -2690,7 +2713,13 @@ static void rc_scene_detection_onepass_rt(AV1_COMP *cpi) {
   last_src_ystride = unscaled_last_src->y_stride;
   last_src_width = unscaled_last_src->y_width;
   last_src_height = unscaled_last_src->y_height;
-  if (src_width != last_src_width || src_height != last_src_height) return;
+  if (src_width != last_src_width || src_height != last_src_height) {
+    if (cpi->src_sad_blk_64x64) {
+      aom_free(cpi->src_sad_blk_64x64);
+      cpi->src_sad_blk_64x64 = NULL;
+    }
+    return;
+  }
   rc->high_source_sad = 0;
   rc->high_num_blocks_with_motion = 0;
   rc->prev_avg_source_sad = rc->avg_source_sad;
@@ -2718,6 +2747,17 @@ static void rc_scene_detection_onepass_rt(AV1_COMP *cpi) {
     int light_change = 0;
     // Flag to check light change or not.
     const int check_light_change = 0;
+    // Store blkwise SAD for later use
+    if (cpi->sf.rt_sf.sad_based_comp_prune && (cm->spatial_layer_id == 0) &&
+        (cm->width == cm->render_width) && (cm->height == cm->render_height)) {
+      full_sampling = 1;
+      if (cpi->src_sad_blk_64x64 == NULL) {
+        CHECK_MEM_ERROR(
+            cm, cpi->src_sad_blk_64x64,
+            (uint64_t *)aom_calloc(sb_cols * sb_rows,
+                                   sizeof(*cpi->src_sad_blk_64x64)));
+      }
+    }
     for (int sbi_row = 0; sbi_row < sb_rows; ++sbi_row) {
       for (int sbi_col = 0; sbi_col < sb_cols; ++sbi_col) {
         // Checker-board pattern, ignore boundary.
@@ -2728,6 +2768,8 @@ static void rc_scene_detection_onepass_rt(AV1_COMP *cpi) {
               (sbi_row % 2 != 0 && sbi_col % 2 != 0)))) {
           tmp_sad = cpi->ppi->fn_ptr[bsize].sdf(src_y, src_ystride, last_src_y,
                                                 last_src_ystride);
+          if (cpi->src_sad_blk_64x64 != NULL)
+            cpi->src_sad_blk_64x64[sbi_col + sbi_row * sb_cols] = tmp_sad;
           if (check_light_change) {
             unsigned int sse, variance;
             variance = cpi->ppi->fn_ptr[bsize].vf(

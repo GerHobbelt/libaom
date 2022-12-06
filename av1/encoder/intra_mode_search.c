@@ -1363,8 +1363,9 @@ int64_t av1_rd_pick_intra_sby_mode(const AV1_COMP *const cpi, MACROBLOCK *x,
   set_mode_eval_params(cpi, x, MODE_EVAL);
 
   MB_MODE_INFO best_mbmi = *mbmi;
-  zero_winner_mode_stats(bsize, MAX_WINNER_MODE_COUNT_INTRA,
-                         x->winner_mode_stats);
+  const int max_winner_mode_count =
+      winner_mode_count_allowed[cpi->sf.winner_mode_sf.multi_winner_mode_type];
+  zero_winner_mode_stats(bsize, max_winner_mode_count, x->winner_mode_stats);
   x->winner_mode_count = 0;
 
   // Searches the intra-modes except for intrabc, palette, and filter_intra.
@@ -1517,7 +1518,7 @@ int64_t av1_rd_pick_intra_sby_mode(const AV1_COMP *const cpi, MACROBLOCK *x,
 
     for (int mode_idx = 0; mode_idx < x->winner_mode_count; mode_idx++) {
       *mbmi = x->winner_mode_stats[mode_idx].mbmi;
-      if (is_winner_mode_processing_enabled(cpi, x, mbmi, mbmi->mode)) {
+      if (is_winner_mode_processing_enabled(cpi, x, mbmi, 0)) {
         // Restore color_map of palette mode before winner mode processing
         if (mbmi->palette_mode_info.palette_size[0] > 0) {
           uint8_t *color_map_src =
@@ -1549,7 +1550,7 @@ int64_t av1_rd_pick_intra_sby_mode(const AV1_COMP *const cpi, MACROBLOCK *x,
     // If previous searches use only the default tx type/no R-D optimization of
     // quantized coeffs, do an extra search for the best tx type/better R-D
     // optimization of quantized coeffs
-    if (is_winner_mode_processing_enabled(cpi, x, mbmi, best_mbmi.mode)) {
+    if (is_winner_mode_processing_enabled(cpi, x, mbmi, 0)) {
       // Set params for winner mode evaluation
       set_mode_eval_params(cpi, x, WINNER_MODE_EVAL);
       *mbmi = best_mbmi;

@@ -512,12 +512,12 @@ static void accumulate_this_frame_stats(const FIRSTPASS_STATS *stats,
   gf_stats->gf_group_inactive_zone_rows += stats->inactive_zone_rows;
 }
 
-static void accumulate_next_frame_stats(const FIRSTPASS_STATS *stats,
-                                        const int flash_detected,
-                                        const int frames_since_key,
-                                        const int cur_idx,
-                                        GF_GROUP_STATS *gf_stats, int f_w,
-                                        int f_h) {
+void av1_accumulate_next_frame_stats(const FIRSTPASS_STATS *stats,
+                                     const int flash_detected,
+                                     const int frames_since_key,
+                                     const int cur_idx,
+                                     GF_GROUP_STATS *gf_stats, int f_w,
+                                     int f_h) {
   accumulate_frame_motion_stats(stats, gf_stats, f_w, f_h);
   // sum up the metric values of current gf group
   gf_stats->avg_sr_coded_error += stats->sr_coded_error;
@@ -1929,8 +1929,9 @@ static void calculate_gf_length(AV1_COMP *cpi, int max_gop_length,
       flash_detected = detect_flash(twopass, &cpi->twopass_frame, 0);
       // TODO(bohanli): remove redundant accumulations here, or unify
       // this and the ones in define_gf_group
-      accumulate_next_frame_stats(&next_frame, flash_detected,
-                                  rc->frames_since_key, i, &gf_stats, f_w, f_h);
+      av1_accumulate_next_frame_stats(&next_frame, flash_detected,
+                                      rc->frames_since_key, i, &gf_stats, f_w,
+                                      f_h);
 
       cut_here = detect_gf_cut(cpi, i, cur_start, flash_detected,
                                active_max_gf_interval, active_min_gf_interval,
@@ -2081,7 +2082,7 @@ static void calculate_gf_length(AV1_COMP *cpi, int max_gop_length,
       cut_pos[count_cuts] = cur_last;
       count_cuts++;
 
-      // reset pointers to the shrinked location
+      // reset pointers to the shrunken location
       cpi->twopass_frame.stats_in = start_pos + cur_last;
       cur_start = cur_last;
       int cur_region_idx =
@@ -2266,8 +2267,9 @@ static void accumulate_gop_stats(AV1_COMP *cpi, int is_intra_only, int f_w,
     flash_detected = detect_flash(twopass, &cpi->twopass_frame, 0);
 
     // accumulate stats for next frame
-    accumulate_next_frame_stats(next_frame, flash_detected,
-                                rc->frames_since_key, i, gf_stats, f_w, f_h);
+    av1_accumulate_next_frame_stats(next_frame, flash_detected,
+                                    rc->frames_since_key, i, gf_stats, f_w,
+                                    f_h);
 
     ++i;
   }
@@ -2891,7 +2893,6 @@ static int define_kf_interval(AV1_COMP *cpi,
   int i = 0, j;
   int frames_to_key = search_start_idx;
   int frames_since_key = rc->frames_since_key + 1;
-  int num_stats_used_for_kf_boost = 1;
   int scenecut_detected = 0;
 
   int num_frames_to_next_key = detect_app_forced_key(cpi);
@@ -2918,9 +2919,6 @@ static int define_kf_interval(AV1_COMP *cpi,
       av1_firstpass_info_future_count(firstpass_info, 0);
   while (frames_to_key < future_stats_count &&
          frames_to_key < num_frames_to_detect_scenecut) {
-    // Accumulate total number of stats available till next key frame
-    num_stats_used_for_kf_boost++;
-
     // Provided that we are not at the end of the file...
     if ((cpi->ppi->p_rc.enable_scenecut_detection > 0) && kf_cfg->auto_key &&
         frames_to_key + 1 < future_stats_count) {
@@ -3513,7 +3511,6 @@ static void estimate_noise(FIRSTPASS_STATS *first_stats,
                            FIRSTPASS_STATS *last_stats) {
   FIRSTPASS_STATS *this_stats, *next_stats;
   double C1, C2, C3, noise;
-  int count = 0;
   for (this_stats = first_stats + 2; this_stats < last_stats; this_stats++) {
     this_stats->noise_var = 0.0;
     // flashes tend to have high correlation of innovations, so ignore them.
@@ -3535,7 +3532,6 @@ static void estimate_noise(FIRSTPASS_STATS *first_stats,
     noise = (this_stats - 1)->intra_error - C1 * C2 / C3;
     noise = AOMMAX(noise, 0.01);
     this_stats->noise_var = noise;
-    count++;
   }
 
   // Copy noise from the neighbor if the noise value is not trustworthy
@@ -3925,6 +3921,10 @@ void av1_init_second_pass(AV1_COMP *cpi) {
                   (int)round(stats->count));
 #endif
 
+#if CONFIG_RATECTRL_LOG
+  rc_log_init(&cpi->rc_log);
+#endif
+
   // This variable monitors how far behind the second ref update is lagging.
   twopass->sr_update_lag = 1;
 
@@ -4195,10 +4195,9 @@ void av1_twopass_postencode_update(AV1_COMP *cpi) {
 #endif
   }
 
-#if CONFIG_FRAME_PARALLEL_ENCODE
   // Update the frame probabilities obtained from parallel encode frames
   FrameProbInfo *const frame_probs = &cpi->ppi->frame_probs;
-#if CONFIG_FPMT_TEST
+#if CONFIG_FRAME_PARALLEL_ENCODE && CONFIG_FPMT_TEST
   /* The variable temp_active_best_quality is introduced only for quality
    * simulation purpose, it retains the value previous to the parallel
    * encode frames. The variable is updated based on the update flag.
@@ -4239,7 +4238,7 @@ void av1_twopass_postencode_update(AV1_COMP *cpi) {
         for (j = TX_TYPES - 1; j >= 0; j--) {
           const int new_prob =
               cpi->frame_new_probs[loop].tx_type_probs[update_type][i][j];
-#if CONFIG_FPMT_TEST
+#if CONFIG_FRAME_PARALLEL_ENCODE && CONFIG_FPMT_TEST
           int prob =
               (temp_frame_probs_simulation->tx_type_probs[update_type][i][j] +
                new_prob) >>
@@ -4267,7 +4266,7 @@ void av1_twopass_postencode_update(AV1_COMP *cpi) {
       for (i = 0; i < BLOCK_SIZES_ALL; i++) {
         const int new_prob =
             cpi->frame_new_probs[loop].obmc_probs[update_type][i];
-#if CONFIG_FPMT_TEST
+#if CONFIG_FRAME_PARALLEL_ENCODE && CONFIG_FPMT_TEST
         temp_frame_probs_simulation->obmc_probs[update_type][i] =
             (temp_frame_probs_simulation->obmc_probs[update_type][i] +
              new_prob) >>
@@ -4285,7 +4284,7 @@ void av1_twopass_postencode_update(AV1_COMP *cpi) {
       const FRAME_UPDATE_TYPE update_type =
           get_frame_update_type(&cpi->ppi->gf_group, cpi->gf_frame_index);
       const int new_prob = cpi->frame_new_probs[loop].warped_probs[update_type];
-#if CONFIG_FPMT_TEST
+#if CONFIG_FRAME_PARALLEL_ENCODE && CONFIG_FPMT_TEST
       temp_frame_probs_simulation->warped_probs[update_type] =
           (temp_frame_probs_simulation->warped_probs[update_type] + new_prob) >>
           1;
@@ -4307,7 +4306,7 @@ void av1_twopass_postencode_update(AV1_COMP *cpi) {
         for (j = SWITCHABLE_FILTERS - 1; j >= 0; j--) {
           const int new_prob = cpi->frame_new_probs[loop]
                                    .switchable_interp_probs[update_type][i][j];
-#if CONFIG_FPMT_TEST
+#if CONFIG_FRAME_PARALLEL_ENCODE && CONFIG_FPMT_TEST
           int prob = (temp_frame_probs_simulation
                           ->switchable_interp_probs[update_type][i][j] +
                       new_prob) >>
@@ -4330,7 +4329,7 @@ void av1_twopass_postencode_update(AV1_COMP *cpi) {
     }
   }
 
-#if CONFIG_FPMT_TEST
+#if CONFIG_FRAME_PARALLEL_ENCODE && CONFIG_FPMT_TEST
   // Copying temp_frame_probs_simulation to temp_frame_probs based on
   // the flag
   if (cpi->do_frame_data_update &&
@@ -4364,7 +4363,7 @@ void av1_twopass_postencode_update(AV1_COMP *cpi) {
   if (cpi->common.show_frame &&
       cpi->ppi->gf_group.frame_parallel_level[cpi->gf_frame_index] > 0)
     cpi->framerate = cpi->new_framerate;
-#if CONFIG_FPMT_TEST
+#if CONFIG_FRAME_PARALLEL_ENCODE && CONFIG_FPMT_TEST
   // SIMULATION PURPOSE
   int show_existing_between_parallel_frames_cndn =
       (cpi->ppi->gf_group.update_type[cpi->gf_frame_index] ==
@@ -4373,6 +4372,5 @@ void av1_twopass_postencode_update(AV1_COMP *cpi) {
   if (cpi->common.show_frame && !show_existing_between_parallel_frames_cndn &&
       cpi->do_frame_data_update && simulate_parallel_frame)
     cpi->temp_framerate = cpi->framerate;
-#endif
 #endif
 }

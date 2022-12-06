@@ -252,7 +252,7 @@ void aom_img_write(const aom_image_t *img, FILE *file) {
   }
 }
 
-int aom_img_read(aom_image_t *img, FILE *file) {
+bool aom_img_read(aom_image_t *img, FILE *file) {
   int plane;
 
   for (plane = 0; plane < 3; ++plane) {
@@ -264,12 +264,12 @@ int aom_img_read(aom_image_t *img, FILE *file) {
     int y;
 
     for (y = 0; y < h; ++y) {
-      if (fread(buf, 1, w, file) != (size_t)w) return 0;
+      if (fread(buf, 1, w, file) != (size_t)w) return false;
       buf += stride;
     }
   }
 
-  return 1;
+  return true;
 }
 
 // TODO(dkovalev) change sse_to_psnr signature: double -> int64_t
@@ -481,7 +481,7 @@ static int img_shifted_realloc_required(const aom_image_t *img,
          required_fmt != shifted->fmt;
 }
 
-void aom_shift_img(unsigned int output_bit_depth, aom_image_t **img_ptr,
+bool aom_shift_img(unsigned int output_bit_depth, aom_image_t **img_ptr,
                    aom_image_t **img_shifted_ptr) {
   aom_image_t *img = *img_ptr;
   aom_image_t *img_shifted = *img_shifted_ptr;
@@ -501,6 +501,10 @@ void aom_shift_img(unsigned int output_bit_depth, aom_image_t **img_ptr,
     }
     if (!img_shifted) {
       img_shifted = aom_img_alloc(NULL, shifted_fmt, img->d_w, img->d_h, 16);
+      if (!img_shifted) {
+        *img_shifted_ptr = NULL;
+        return false;
+      }
       img_shifted->bit_depth = output_bit_depth;
       img_shifted->monochrome = img->monochrome;
       img_shifted->csp = img->csp;
@@ -513,6 +517,8 @@ void aom_shift_img(unsigned int output_bit_depth, aom_image_t **img_ptr,
     *img_shifted_ptr = img_shifted;
     *img_ptr = img_shifted;
   }
+
+  return true;
 }
 
 // Related to I420, NV12 format has one luma "luminance" plane Y and one plane

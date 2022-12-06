@@ -48,7 +48,7 @@ std::unordered_map<std::string,
                        { "niklas_1280_720_30.y4m",
                          { { 5, { { 0, 34.4 }, { 3, 34.30 } } },
                            { 6, { { 0, 34.2 }, { 3, 34.2 } } },
-                           { 7, { { 0, 33.6 }, { 3, 33.6 } } },
+                           { 7, { { 0, 33.5 }, { 3, 33.5 } } },
                            { 8, { { 0, 33.48 }, { 3, 33.48 } } },
                            { 9, { { 0, 33.4 }, { 3, 33.4 } } },
                            { 10, { { 0, 33.2 }, { 3, 33.2 } } } } },
@@ -166,7 +166,7 @@ class RTEndToEndTest
       video.reset(new libaom_test::YUVVideoSource(test_video_param_.filename,
                                                   test_video_param_.fmt, 352,
                                                   288, 30, 1, 0, kFrames));
-    ASSERT_TRUE(video.get() != NULL);
+    ASSERT_NE(video, nullptr);
 
     ASSERT_NO_FATAL_FAILURE(RunLoop(video.get()));
     const double psnr = GetAveragePsnr();

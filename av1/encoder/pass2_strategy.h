@@ -135,9 +135,15 @@ int av1_calc_arf_boost(const TWO_PASS *twopass,
                        int *num_fpstats_used, int *num_fpstats_required,
                        int project_gfu_boost);
 
+void av1_accumulate_next_frame_stats(const FIRSTPASS_STATS *stats,
+                                     const int flash_detected,
+                                     const int frames_since_key,
+                                     const int cur_idx,
+                                     GF_GROUP_STATS *gf_stats, int f_w,
+                                     int f_h);
 // Identify stable and unstable regions from first pass stats.
-// Stats_start points to the first frame to analyze.
-// Offset is the offset from the current frame to the frame stats_start is
+// stats_start points to the first frame to analyze.
+// |offset| is the offset from the current frame to the frame stats_start is
 // pointing to.
 void av1_identify_regions(const FIRSTPASS_STATS *const stats_start,
                           int total_frames, int offset, REGIONS *regions,

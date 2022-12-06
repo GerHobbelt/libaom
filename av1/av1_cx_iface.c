@@ -23,6 +23,7 @@
 #include "av1/av1_iface_common.h"
 #include "av1/encoder/bitstream.h"
 #include "av1/encoder/encoder.h"
+#include "av1/encoder/encoder_utils.h"
 #include "av1/encoder/ethread.h"
 #include "av1/encoder/external_partition.h"
 #include "av1/encoder/firstpass.h"
@@ -204,6 +205,7 @@ struct av1_extracfg {
 // coeff_cost_upd_freq: COST_UPD_OFF
 // mode_cost_upd_freq: COST_UPD_OFF
 // mv_cost_upd_freq: COST_UPD_OFF
+// dv_cost_upd_freq: COST_UPD_OFF
 static const struct av1_extracfg default_extra_cfg = {
   7,  // cpu_used
   1,  // enable_auto_alt_ref
@@ -272,43 +274,46 @@ static const struct av1_extracfg default_extra_cfg = {
   0,                            // film_grain_test_vector
   NULL,                         // film_grain_table_filename
   0,                            // motion_vector_unit_test
-  1,                            // CDF update mode
-  1,                            // enable rectangular partitions
-  1,                            // enable ab shape partitions
-  1,                            // enable 1:4 and 4:1 partitions
-  4,                            // min_partition_size
-  128,                          // max_partition_size
-  1,                            // enable intra edge filter
-  1,                            // frame order hint
-  1,                            // enable 64-pt transform usage
-  1,                            // enable flip and identity transform
-  1,                            // enable rectangular transform usage
-  1,                            // dist-wtd compound
-  7,                            // max_reference_frames
-  0,                            // enable_reduced_reference_set
-  1,                            // enable_ref_frame_mvs sequence level
-  1,                            // allow ref_frame_mvs frame level
-  1,                            // enable masked compound at sequence level
-  1,                            // enable one sided compound at sequence level
-  1,                            // enable interintra compound at sequence level
-  1,                            // enable smooth interintra mode
-  1,                            // enable difference-weighted compound
-  1,                            // enable interinter wedge compound
-  1,                            // enable interintra wedge compound
-  0,                            // enable_global_motion usage
-  0,                            // enable_warped_motion at sequence level
-  0,                            // allow_warped_motion at frame level
-  1,                            // enable filter intra at sequence level
-  1,                            // enable smooth intra modes usage for sequence
-  1,                            // enable Paeth intra mode usage for sequence
-  1,                            // enable CFL uv intra mode usage for sequence
-  1,                       // enable directional intra mode usage for sequence
-  1,                       // enable D45 to D203 intra mode usage for sequence
-  1,                       // superres
-  1,                       // enable overlay
-  1,                       // enable palette
-  !CONFIG_SHARP_SETTINGS,  // enable intrabc
-  1,                       // enable angle delta
+#if CONFIG_FRAME_PARALLEL_ENCODE && CONFIG_FPMT_TEST
+  0,  // fpmt_unit_test
+#endif
+  1,    // CDF update mode
+  1,    // enable rectangular partitions
+  1,    // enable ab shape partitions
+  1,    // enable 1:4 and 4:1 partitions
+  4,    // min_partition_size
+  128,  // max_partition_size
+  1,    // enable intra edge filter
+  1,    // frame order hint
+  1,    // enable 64-pt transform usage
+  1,    // enable flip and identity transform
+  1,    // enable rectangular transform usage
+  1,    // dist-wtd compound
+  7,    // max_reference_frames
+  0,    // enable_reduced_reference_set
+  1,    // enable_ref_frame_mvs sequence level
+  1,    // allow ref_frame_mvs frame level
+  1,    // enable masked compound at sequence level
+  1,    // enable one sided compound at sequence level
+  1,    // enable interintra compound at sequence level
+  1,    // enable smooth interintra mode
+  1,    // enable difference-weighted compound
+  1,    // enable interinter wedge compound
+  1,    // enable interintra wedge compound
+  0,    // enable_global_motion usage
+  0,    // enable_warped_motion at sequence level
+  0,    // allow_warped_motion at frame level
+  1,    // enable filter intra at sequence level
+  1,    // enable smooth intra modes usage for sequence
+  1,    // enable Paeth intra mode usage for sequence
+  1,    // enable CFL uv intra mode usage for sequence
+  1,    // enable directional intra mode usage for sequence
+  1,    // enable D45 to D203 intra mode usage for sequence
+  1,    // superres
+  1,    // enable overlay
+  1,    // enable palette
+  1,    // enable intrabc
+  1,    // enable angle delta
 #if CONFIG_DENOISE
   0,   // noise_level
   32,  // noise_block_size
@@ -450,27 +455,27 @@ static const struct av1_extracfg default_extra_cfg = {
   1,                            // enable smooth intra modes usage for sequence
   1,                            // enable Paeth intra mode usage for sequence
   1,                            // enable CFL uv intra mode usage for sequence
-  1,                       // enable directional intra mode usage for sequence
-  1,                       // enable D45 to D203 intra mode usage for sequence
-  1,                       // superres
-  1,                       // enable overlay
-  1,                       // enable palette
-  !CONFIG_SHARP_SETTINGS,  // enable intrabc
-  1,                       // enable angle delta
+  1,   // enable directional intra mode usage for sequence
+  1,   // enable D45 to D203 intra mode usage for sequence
+  1,   // superres
+  1,   // enable overlay
+  1,   // enable palette
+  1,   // enable intrabc
+  1,   // enable angle delta
 #if CONFIG_DENOISE
-  0,                       // noise_level
-  32,                      // noise_block_size
-  1,                       // enable_dnl_denoising
+  0,   // noise_level
+  32,  // noise_block_size
+  1,   // enable_dnl_denoising
 #endif
-  0,                       // chroma_subsampling_x
-  0,                       // chroma_subsampling_y
-  0,                       // reduced_tx_type_set
-  0,                       // use_intra_dct_only
-  0,                       // use_inter_dct_only
-  0,                       // use_intra_default_tx_only
-  1,                       // enable_tx_size_search
-  0,                       // quant_b_adapt
-  0,                       // vbr_corpus_complexity_lap
+  0,   // chroma_subsampling_x
+  0,   // chroma_subsampling_y
+  0,   // reduced_tx_type_set
+  0,   // use_intra_dct_only
+  0,   // use_inter_dct_only
+  0,   // use_intra_default_tx_only
+  1,   // enable_tx_size_search
+  0,   // quant_b_adapt
+  0,   // vbr_corpus_complexity_lap
   {
       SEQ_LEVEL_MAX, SEQ_LEVEL_MAX, SEQ_LEVEL_MAX, SEQ_LEVEL_MAX, SEQ_LEVEL_MAX,
       SEQ_LEVEL_MAX, SEQ_LEVEL_MAX, SEQ_LEVEL_MAX, SEQ_LEVEL_MAX, SEQ_LEVEL_MAX,
@@ -1402,14 +1407,9 @@ static aom_codec_err_t set_encoder_config(AV1EncoderConfig *oxcf,
   oxcf->unit_test_cfg.sb_multipass_unit_test =
       extra_cfg->sb_multipass_unit_test;
 
-  // For allintra encoding mode, inter-frame motion search is not applicable and
-  // the intraBC motion vectors are restricted within the tile boundaries. Hence
-  // a smaller frame border size (AOM_ENC_ALLINTRA_BORDER) is used in this case.
   oxcf->border_in_pixels =
-      (resize_cfg->resize_mode || superres_cfg->superres_mode)
-          ? AOM_BORDER_IN_PIXELS
-          : (oxcf->kf_cfg.key_freq_max == 0) ? AOM_ENC_ALLINTRA_BORDER
-                                             : AOM_ENC_NO_SCALE_BORDER;
+      av1_get_enc_border_size(av1_is_resize_needed(oxcf),
+                              (oxcf->kf_cfg.key_freq_max == 0), BLOCK_128X128);
   memcpy(oxcf->target_seq_level_idx, extra_cfg->target_seq_level_idx,
          sizeof(oxcf->target_seq_level_idx));
   oxcf->tier_mask = extra_cfg->tier_mask;
@@ -2538,7 +2538,7 @@ static aom_codec_err_t encoder_init(aom_codec_ctx_t *ctx) {
     if (priv->cfg.g_usage == ALLINTRA) {
       priv->extra_cfg.enable_cdef = 0;
     }
-    av1_initialize_enc();
+    av1_initialize_enc(priv->cfg.g_usage, priv->cfg.rc_end_usage);
 
     res = validate_config(priv, &priv->cfg, &priv->extra_cfg);
 
@@ -2867,6 +2867,18 @@ static aom_codec_err_t encoder_encode(aom_codec_alg_priv_t *ctx,
       if (!ppi->lookahead) {
         int lag_in_frames = cpi_lap != NULL ? cpi_lap->oxcf.gf_cfg.lag_in_frames
                                             : cpi->oxcf.gf_cfg.lag_in_frames;
+        AV1EncoderConfig *oxcf = &cpi->oxcf;
+        const BLOCK_SIZE sb_size = av1_select_sb_size(
+            oxcf, oxcf->frm_dim_cfg.width, oxcf->frm_dim_cfg.height,
+            cpi->svc.number_spatial_layers);
+        oxcf->border_in_pixels =
+            av1_get_enc_border_size(av1_is_resize_needed(oxcf),
+                                    oxcf->kf_cfg.key_freq_max == 0, sb_size);
+#if CONFIG_FRAME_PARALLEL_ENCODE
+        for (int i = 0; i < ppi->num_fp_contexts; i++) {
+          ppi->parallel_cpi[i]->oxcf.border_in_pixels = oxcf->border_in_pixels;
+        }
+#endif
 
         ppi->lookahead = av1_lookahead_init(
             cpi->oxcf.frm_dim_cfg.width, cpi->oxcf.frm_dim_cfg.height,
@@ -3532,6 +3544,7 @@ static aom_codec_err_t encoder_set_option(aom_codec_alg_priv_t *ctx,
 #endif
 
   argv[0] = aom_malloc(len * sizeof(argv[1][0]));
+  if (!argv[0]) return AOM_CODEC_MEM_ERROR;
   snprintf(argv[0], len, "--%s=%s", name, value);
   struct arg arg;
   aom_codec_err_t err = AOM_CODEC_OK;
@@ -4182,21 +4195,22 @@ static const aom_codec_enc_cfg_t encoder_usage_cfg[] = {
       2000,  // rc_two_pass_vbrmax_section
 
       // keyframing settings (kf)
-      0,            // fwd_kf_enabled
-      AOM_KF_AUTO,  // kf_mode
-      0,            // kf_min_dist
-      9999,         // kf_max_dist
-      0,            // sframe_dist
-      1,            // sframe_mode
-      0,            // large_scale_tile
-      0,            // monochrome
-      0,            // full_still_picture_hdr
-      0,            // save_as_annexb
-      0,            // tile_width_count
-      0,            // tile_height_count
-      { 0 },        // tile_widths
-      { 0 },        // tile_heights
-      0,            // use_fixed_qp_offsets
+      0,                       // fwd_kf_enabled
+      AOM_KF_AUTO,             // kf_mode
+      0,                       // kf_min_dist
+      9999,                    // kf_max_dist
+      0,                       // sframe_dist
+      1,                       // sframe_mode
+      0,                       // large_scale_tile
+      0,                       // monochrome
+      0,                       // full_still_picture_hdr
+      0,                       // save_as_annexb
+      0,                       // tile_width_count
+      0,                       // tile_height_count
+      { 0 },                   // tile_widths
+      { 0 },                   // tile_heights
+      0,                       // use_fixed_qp_offsets
+      { -1, -1, -1, -1, -1 },  // fixed_qp_offsets
       { 0, 128, 128, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,   0,   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },  // cfg
   },
@@ -4252,21 +4266,22 @@ static const aom_codec_enc_cfg_t encoder_usage_cfg[] = {
       2000,  // rc_two_pass_vbrmax_section
 
       // keyframing settings (kf)
-      0,            // fwd_kf_enabled
-      AOM_KF_AUTO,  // kf_mode
-      0,            // kf_min_dist
-      9999,         // kf_max_dist
-      0,            // sframe_dist
-      1,            // sframe_mode
-      0,            // large_scale_tile
-      0,            // monochrome
-      0,            // full_still_picture_hdr
-      0,            // save_as_annexb
-      0,            // tile_width_count
-      0,            // tile_height_count
-      { 0 },        // tile_widths
-      { 0 },        // tile_heights
-      0,            // use_fixed_qp_offsets
+      0,                       // fwd_kf_enabled
+      AOM_KF_AUTO,             // kf_mode
+      0,                       // kf_min_dist
+      9999,                    // kf_max_dist
+      0,                       // sframe_dist
+      1,                       // sframe_mode
+      0,                       // large_scale_tile
+      0,                       // monochrome
+      0,                       // full_still_picture_hdr
+      0,                       // save_as_annexb
+      0,                       // tile_width_count
+      0,                       // tile_height_count
+      { 0 },                   // tile_widths
+      { 0 },                   // tile_heights
+      0,                       // use_fixed_qp_offsets
+      { -1, -1, -1, -1, -1 },  // fixed_qp_offsets
       { 0, 128, 128, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,   0,   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },  // cfg
   },
@@ -4322,21 +4337,22 @@ static const aom_codec_enc_cfg_t encoder_usage_cfg[] = {
       2000,  // rc_two_pass_vbrmax_section
 
       // keyframing settings (kf)
-      0,                // fwd_kf_enabled
-      AOM_KF_DISABLED,  // kf_mode
-      0,                // kf_min_dist
-      0,                // kf_max_dist
-      0,                // sframe_dist
-      1,                // sframe_mode
-      0,                // large_scale_tile
-      0,                // monochrome
-      0,                // full_still_picture_hdr
-      0,                // save_as_annexb
-      0,                // tile_width_count
-      0,                // tile_height_count
-      { 0 },            // tile_widths
-      { 0 },            // tile_heights
-      0,                // use_fixed_qp_offsets
+      0,                       // fwd_kf_enabled
+      AOM_KF_DISABLED,         // kf_mode
+      0,                       // kf_min_dist
+      0,                       // kf_max_dist
+      0,                       // sframe_dist
+      1,                       // sframe_mode
+      0,                       // large_scale_tile
+      0,                       // monochrome
+      0,                       // full_still_picture_hdr
+      0,                       // save_as_annexb
+      0,                       // tile_width_count
+      0,                       // tile_height_count
+      { 0 },                   // tile_widths
+      { 0 },                   // tile_heights
+      0,                       // use_fixed_qp_offsets
+      { -1, -1, -1, -1, -1 },  // fixed_qp_offsets
       { 0, 128, 128, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,   0,   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },  // cfg
   },

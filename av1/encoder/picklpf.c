@@ -69,9 +69,12 @@ static int64_t try_filter_frame(const YV12_BUFFER_CONFIG *sd,
     case 2: cm->lf.filter_level_v = filter_level[0]; break;
   }
 
+  // lpf_opt_level = 1 : Enables dual/quad loop-filtering.
+  int lpf_opt_level = is_inter_tx_size_search_level_one(&cpi->sf.tx_sf);
+
   av1_loop_filter_frame_mt(&cm->cur_frame->buf, cm, &cpi->td.mb.e_mbd, plane,
                            plane + 1, partial_frame, mt_info->workers,
-                           num_workers, &mt_info->lf_row_sync, 0);
+                           num_workers, &mt_info->lf_row_sync, lpf_opt_level);
 
   filt_err = aom_get_sse_plane(sd, &cm->cur_frame->buf, plane,
                                cm->seq_params->use_highbitdepth);
@@ -287,17 +290,10 @@ void av1_pick_filter_level(const YV12_BUFFER_CONFIG *sd, AV1_COMP *cpi,
   } else {
     int last_frame_filter_level[4] = { 0 };
     if (!frame_is_intra_only(cm)) {
-#if CONFIG_FRAME_PARALLEL_ENCODE
       last_frame_filter_level[0] = cpi->ppi->filter_level[0];
       last_frame_filter_level[1] = cpi->ppi->filter_level[1];
       last_frame_filter_level[2] = cpi->ppi->filter_level_u;
       last_frame_filter_level[3] = cpi->ppi->filter_level_v;
-#else
-      last_frame_filter_level[0] = lf->filter_level[0];
-      last_frame_filter_level[1] = lf->filter_level[1];
-      last_frame_filter_level[2] = lf->filter_level_u;
-      last_frame_filter_level[3] = lf->filter_level_v;
-#endif
     }
     // The frame buffer last_frame_uf is used to store the non-loop filtered
     // reconstructed frame in search_filter_level().
@@ -305,7 +301,7 @@ void av1_pick_filter_level(const YV12_BUFFER_CONFIG *sd, AV1_COMP *cpi,
             &cpi->last_frame_uf, cm->width, cm->height,
             seq_params->subsampling_x, seq_params->subsampling_y,
             seq_params->use_highbitdepth, cpi->oxcf.border_in_pixels,
-            cm->features.byte_alignment, NULL, NULL, NULL, 0))
+            cm->features.byte_alignment, NULL, NULL, NULL, 0, 0))
       aom_internal_error(cm->error, AOM_CODEC_MEM_ERROR,
                          "Failed to allocate last frame buffer");
 

@@ -783,7 +783,9 @@ int av1_get_rdmult_delta(AV1_COMP *cpi, BLOCK_SIZE bsize, int mi_row,
     return orig_rdmult;
   }
 
+#ifndef NDEBUG
   int mi_count = 0;
+#endif
   const int mi_col_sr =
       coded_to_superres_mi(mi_col, cm->superres_scale_denominator);
   const int mi_col_end_sr =
@@ -803,7 +805,9 @@ int av1_get_rdmult_delta(AV1_COMP *cpi, BLOCK_SIZE bsize, int mi_row,
                  this_stats->mc_dep_dist);
       intra_cost += this_stats->recrf_dist << RDDIV_BITS;
       mc_dep_cost += (this_stats->recrf_dist << RDDIV_BITS) + mc_dep_delta;
+#ifndef NDEBUG
       mi_count++;
+#endif
     }
   }
   assert(mi_count <= MAX_TPL_BLK_IN_SB * MAX_TPL_BLK_IN_SB);
@@ -990,7 +994,9 @@ int av1_get_q_for_deltaq_objective(AV1_COMP *const cpi, ThreadData *td,
   int tpl_stride = tpl_frame->stride;
   if (!tpl_frame->is_valid) return base_qindex;
 
+#ifndef NDEBUG
   int mi_count = 0;
+#endif
   const int mi_col_sr =
       coded_to_superres_mi(mi_col, cm->superres_scale_denominator);
   const int mi_col_end_sr =
@@ -1016,7 +1022,9 @@ int av1_get_q_for_deltaq_objective(AV1_COMP *const cpi, ThreadData *td,
       srcrf_dist += (double)(this_stats->srcrf_dist << RDDIV_BITS);
       srcrf_sse += (double)(this_stats->srcrf_sse << RDDIV_BITS);
       srcrf_rate += (double)this_stats->srcrf_rate;
+#ifndef NDEBUG
       mi_count++;
+#endif
       cbcmp_base += cbcmp;
     }
   }
@@ -1314,7 +1322,8 @@ void av1_source_content_sb(AV1_COMP *cpi, MACROBLOCK *x, int mi_row,
   uint8_t *last_src_y = cpi->last_source->y_buffer;
   int last_src_ystride = cpi->last_source->y_stride;
   const int offset = cpi->source->y_stride * (mi_row << 2) + (mi_col << 2);
-  uint64_t avg_source_sse_threshold = 100000;        // ~5*5*(64*64)
+  uint64_t avg_source_sse_threshold[2] = { 100000,   // ~5*5*(64*64)
+                                           36000 };  // ~3*3*(64*64)
   uint64_t avg_source_sse_threshold_high = 1000000;  // ~15*15*(64*64)
   uint64_t sum_sq_thresh = 10000;  // sum = sqrt(thresh / 64*64)) ~1.5
 #if CONFIG_AV1_HIGHBITDEPTH
@@ -1325,13 +1334,18 @@ void av1_source_content_sb(AV1_COMP *cpi, MACROBLOCK *x, int mi_row,
   last_src_y += offset;
   tmp_variance = cpi->ppi->fn_ptr[bsize].vf(src_y, src_ystride, last_src_y,
                                             last_src_ystride, &tmp_sse);
+  // rd thresholds
+  if (tmp_sse < avg_source_sse_threshold[1])
+    x->content_state_sb.source_sad_rd = kLowSad;
 
+  // nonrd thresholds
   if (tmp_sse == 0)
-    x->content_state_sb.source_sad = kZeroSad;
-  else if (tmp_sse < avg_source_sse_threshold)
-    x->content_state_sb.source_sad = kLowSad;
+    x->content_state_sb.source_sad_nonrd = kZeroSad;
+  else if (tmp_sse < avg_source_sse_threshold[0])
+    x->content_state_sb.source_sad_nonrd = kLowSad;
   else if (tmp_sse > avg_source_sse_threshold_high)
-    x->content_state_sb.source_sad = kHighSad;
+    x->content_state_sb.source_sad_nonrd = kHighSad;
+
   // Detect large lighting change.
   // Note: tmp_sse - tmp_variance = ((sum * sum) >> 12)
   if (tmp_sse > 0) {

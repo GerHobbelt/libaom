@@ -226,6 +226,7 @@ static aom_codec_err_t parse_layer_options_from_string(
     return AOM_CODEC_INVALID_PARAM;
 
   input_string = malloc(strlen(input));
+  if (!input_string) die("Failed to allocate input string.");
   memcpy(input_string, input, strlen(input));
   if (input_string == NULL) return AOM_CODEC_MEM_ERROR;
   token = strtok(input_string, delim);  // NOLINT
@@ -265,6 +266,10 @@ static void parse_command_line(int argc, const char **argv_,
 
   // process command line options
   argv = argv_dup(argc - 1, argv_ + 1);
+  if (!argv) {
+    fprintf(stderr, "Error allocating argument list\n");
+    exit(EXIT_FAILURE);
+  }
   for (argi = argj = argv; (*argj = *argi); argi += arg.argv_step) {
     arg.argv_step = 1;
 
@@ -284,8 +289,8 @@ static void parse_command_line(int argc, const char **argv_,
       svc_params->number_temporal_layers = arg_parse_uint(&arg);
     } else if (arg_match(&arg, &speed_arg, argi)) {
       app_input->speed = arg_parse_uint(&arg);
-      if (app_input->speed > 9) {
-        aom_tools_warn("Mapping speed %d to speed 9.\n", app_input->speed);
+      if (app_input->speed > 10) {
+        aom_tools_warn("Mapping speed %d to speed 10.\n", app_input->speed);
       }
     } else if (arg_match(&arg, &aqmode_arg, argi)) {
       app_input->aq_mode = arg_parse_uint(&arg);
@@ -1000,7 +1005,7 @@ static void set_layer_pattern(
       if (enable_longterm_temporal_ref && layer_id->spatial_layer_id == 2 &&
           layering_mode == 8) {
         ref_frame_config->ref_idx[SVC_ALTREF_FRAME] = REF_FRAMES - 1;
-        ref_frame_config->reference[SVC_ALTREF_FRAME] = 1;
+        if (!is_key_frame) ref_frame_config->reference[SVC_ALTREF_FRAME] = 1;
         if (base_count % 10 == 0 && layer_id->temporal_layer_id == 0)
           ref_frame_config->refresh[REF_FRAMES - 1] = 1;
       }

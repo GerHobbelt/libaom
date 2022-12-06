@@ -10,6 +10,8 @@
  */
 
 #include <cstdlib>
+#include <memory>
+#include <new>
 #include <vector>
 
 #include "av1/encoder/cost.h"
@@ -75,8 +77,10 @@ TEST(TplModelTest, TransformCoeffEntropyTest2) {
 }
 
 TEST(TplModelTest, InitTplStats1) {
-  // We use "new" here to avoid -Wstack-usagea warning
-  TplParams *tpl_data = new TplParams;
+  // We use heap allocation instead of stack allocation here to avoid
+  // -Wstack-usage warning.
+  std::unique_ptr<TplParams> tpl_data(new (std::nothrow) TplParams);
+  ASSERT_NE(tpl_data, nullptr);
   av1_zero(*tpl_data);
   tpl_data->ready = 1;
   EXPECT_EQ(sizeof(tpl_data->tpl_stats_buffer),
@@ -85,12 +89,11 @@ TEST(TplModelTest, InitTplStats1) {
     // Set it to a random non-zero number
     tpl_data->tpl_stats_buffer[i].is_valid = i + 1;
   }
-  av1_init_tpl_stats(tpl_data);
+  av1_init_tpl_stats(tpl_data.get());
   EXPECT_EQ(tpl_data->ready, 0);
   for (int i = 0; i < MAX_LENGTH_TPL_FRAME_STATS; ++i) {
     EXPECT_EQ(tpl_data->tpl_stats_buffer[i].is_valid, 0);
   }
-  delete tpl_data;
 }
 
 TEST(TplModelTest, DeltaRateCostZeroFlow) {
@@ -436,31 +439,32 @@ TEST(TplModelTest, EstimateFrameRateTest) {
 
   std::vector<TplTxfmStats> stats_list(gf_group.size);
   init_toy_tpl_txfm_stats(&stats_list);
+
+  std::vector<double> est_bitrate_list(gf_group.size);
+  init_toy_tpl_txfm_stats(&stats_list);
   const aom_bit_depth_t bit_depth = AOM_BITS_8;
 
   const int q = 125;
 
   // Case1: all scale factors are 0
   double scale_factors[FRAME_UPDATE_TYPES] = { 0 };
-  memcpy(vbr_rc_info.scale_factors, scale_factors, sizeof(scale_factors));
   double estimate = av1_vbr_rc_info_estimate_gop_bitrate(
-      q, bit_depth, vbr_rc_info.scale_factors, gf_group.size,
-      gf_group.update_type, vbr_rc_info.qstep_ratio_list, stats_list.data(),
-      vbr_rc_info.q_index_list, vbr_rc_info.estimated_bitrate_byframe);
+      q, bit_depth, scale_factors, gf_group.size, gf_group.update_type,
+      vbr_rc_info.qstep_ratio_list, stats_list.data(), vbr_rc_info.q_index_list,
+      est_bitrate_list.data());
   EXPECT_NEAR(estimate, 0, epsilon);
 
   // Case2: all scale factors are 1
   for (int i = 0; i < FRAME_UPDATE_TYPES; i++) {
     scale_factors[i] = 1;
   }
-  memcpy(vbr_rc_info.scale_factors, scale_factors, sizeof(scale_factors));
   estimate = av1_vbr_rc_info_estimate_gop_bitrate(
-      q, bit_depth, vbr_rc_info.scale_factors, gf_group.size,
-      gf_group.update_type, vbr_rc_info.qstep_ratio_list, stats_list.data(),
-      vbr_rc_info.q_index_list, vbr_rc_info.estimated_bitrate_byframe);
+      q, bit_depth, scale_factors, gf_group.size, gf_group.update_type,
+      vbr_rc_info.qstep_ratio_list, stats_list.data(), vbr_rc_info.q_index_list,
+      est_bitrate_list.data());
   double ref_estimate = 0;
   for (int i = 0; i < gf_group.size; i++) {
-    ref_estimate += vbr_rc_info.estimated_bitrate_byframe[i];
+    ref_estimate += est_bitrate_list[i];
   }
   EXPECT_NEAR(estimate, ref_estimate, epsilon);
 
@@ -472,15 +476,14 @@ TEST(TplModelTest, EstimateFrameRateTest) {
       scale_factors[i] = 1;
     }
   }
-  memcpy(vbr_rc_info.scale_factors, scale_factors, sizeof(scale_factors));
   estimate = av1_vbr_rc_info_estimate_gop_bitrate(
-      q, bit_depth, vbr_rc_info.scale_factors, gf_group.size,
-      gf_group.update_type, vbr_rc_info.qstep_ratio_list, stats_list.data(),
-      vbr_rc_info.q_index_list, vbr_rc_info.estimated_bitrate_byframe);
+      q, bit_depth, scale_factors, gf_group.size, gf_group.update_type,
+      vbr_rc_info.qstep_ratio_list, stats_list.data(), vbr_rc_info.q_index_list,
+      est_bitrate_list.data());
   ref_estimate = 0;
   for (int i = 0; i < gf_group.size; i++) {
     if (gf_group.update_type[i] != KF_UPDATE) {
-      ref_estimate += vbr_rc_info.estimated_bitrate_byframe[i];
+      ref_estimate += est_bitrate_list[i];
     }
   }
   EXPECT_NEAR(estimate, ref_estimate, epsilon);
@@ -492,9 +495,6 @@ TEST(TplModelTest, VbrRcInfoEstimateBaseQTest) {
 
   VBR_RATECTRL_INFO vbr_rc_info;
   init_toy_vbr_rc_info(&vbr_rc_info, gf_group.size);
-
-  VBR_RATECTRL_INFO ref_vbr_rc_info;
-  init_toy_vbr_rc_info(&ref_vbr_rc_info, gf_group.size);
 
   std::vector<TplTxfmStats> stats_list(gf_group.size);
   init_toy_tpl_txfm_stats(&stats_list);
@@ -509,11 +509,11 @@ TEST(TplModelTest, VbrRcInfoEstimateBaseQTest) {
     const int base_q = av1_vbr_rc_info_estimate_base_q(
         bit_budget, bit_depth, vbr_rc_info.scale_factors, gf_group.size,
         gf_group.update_type, vbr_rc_info.qstep_ratio_list, stats_list.data(),
-        vbr_rc_info.q_index_list, vbr_rc_info.estimated_bitrate_byframe);
+        vbr_rc_info.q_index_list, NULL);
     const int ref_base_q = find_gop_q_iterative(
         bit_budget, bit_depth, vbr_rc_info.scale_factors, gf_group.size,
         gf_group.update_type, vbr_rc_info.qstep_ratio_list, stats_list.data(),
-        vbr_rc_info.q_index_list, vbr_rc_info.estimated_bitrate_byframe);
+        vbr_rc_info.q_index_list, NULL);
     if (bit_budget == 0) {
       EXPECT_EQ(base_q, 255);
     } else if (bit_budget == DBL_MAX) {
