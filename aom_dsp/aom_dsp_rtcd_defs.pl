@@ -607,8 +607,6 @@ if (aom_config("CONFIG_AV1_ENCODER") eq "yes"){
     add_proto qw/void aom_fdct4x4_lp/, "const int16_t *input, int16_t *output, int stride";
     specialize qw/aom_fdct4x4_lp neon sse2/;
 
-    # 8x8 DCT transform for psnr-hvs. Unlike other transforms isn't compatible
-    # with av1 scan orders, because it does two transposes.
     add_proto qw/void aom_fdct8x8/, "const int16_t *input, tran_low_t *output, int stride";
     specialize qw/aom_fdct8x8 neon sse2/, "$ssse3_x86_64";
     # High bit depth
@@ -1013,9 +1011,9 @@ if (aom_config("CONFIG_AV1_ENCODER") eq "yes") {
   specialize qw/aom_sad32x64x4d   avx2 neon sse2/;
   specialize qw/aom_sad32x32x4d   avx2 neon sse2/;
   specialize qw/aom_sad32x16x4d   avx2 neon sse2/;
-  specialize qw/aom_sad16x32x4d        neon sse2/;
-  specialize qw/aom_sad16x16x4d        neon sse2/;
-  specialize qw/aom_sad16x8x4d         neon sse2/;
+  specialize qw/aom_sad16x32x4d   avx2 neon sse2/;
+  specialize qw/aom_sad16x16x4d   avx2 neon sse2/;
+  specialize qw/aom_sad16x8x4d    avx2 neon sse2/;
 
   specialize qw/aom_sad8x16x4d         neon sse2/;
   specialize qw/aom_sad8x8x4d          neon sse2/;
@@ -1026,8 +1024,8 @@ if (aom_config("CONFIG_AV1_ENCODER") eq "yes") {
 
   specialize qw/aom_sad64x16x4d   avx2 neon sse2/;
   specialize qw/aom_sad32x8x4d    avx2 neon sse2/;
-  specialize qw/aom_sad16x64x4d        neon sse2/;
-  specialize qw/aom_sad16x4x4d         neon sse2/;
+  specialize qw/aom_sad16x64x4d   avx2 neon sse2/;
+  specialize qw/aom_sad16x4x4d    avx2 neon sse2/;
   specialize qw/aom_sad8x32x4d         neon sse2/;
   specialize qw/aom_sad4x16x4d         neon sse2/;
 
@@ -1042,10 +1040,10 @@ if (aom_config("CONFIG_AV1_ENCODER") eq "yes") {
   specialize qw/aom_sad_skip_32x16x4d   avx2 sse2 neon/;
   specialize qw/aom_sad_skip_32x8x4d    avx2 sse2 neon/;
 
-  specialize qw/aom_sad_skip_16x64x4d        sse2 neon/;
-  specialize qw/aom_sad_skip_16x32x4d        sse2 neon/;
-  specialize qw/aom_sad_skip_16x16x4d        sse2 neon/;
-  specialize qw/aom_sad_skip_16x8x4d         sse2 neon/;
+  specialize qw/aom_sad_skip_16x64x4d   avx2 sse2 neon/;
+  specialize qw/aom_sad_skip_16x32x4d   avx2 sse2 neon/;
+  specialize qw/aom_sad_skip_16x16x4d   avx2 sse2 neon/;
+  specialize qw/aom_sad_skip_16x8x4d    avx2 sse2 neon/;
   specialize qw/aom_sad_skip_8x32x4d         sse2 neon/;
   specialize qw/aom_sad_skip_8x16x4d         sse2 neon/;
   specialize qw/aom_sad_skip_8x8x4d          sse2 neon/;
