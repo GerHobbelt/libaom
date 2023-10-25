@@ -630,8 +630,10 @@ int FindBetterGopCut(const std::vector<FIRSTPASS_STATS> &stats_list,
           temp_accu_coeff *= stats_list[order_index + n].cor_coeff;
           this_score +=
               temp_accu_coeff *
-              (1 - stats_list[order_index + n].noise_var /
-                       AOMMAX(regions_list[this_reg].avg_intra_err, 0.001));
+              sqrt(AOMMAX(
+                  0.5, 1 - stats_list[order_index + n].noise_var /
+                               AOMMAX(stats_list[order_index + n].intra_error,
+                                      0.001)));
           count_f++;
         }
         // preceding frames
@@ -641,8 +643,10 @@ int FindBetterGopCut(const std::vector<FIRSTPASS_STATS> &stats_list,
           temp_accu_coeff *= stats_list[order_index + n].cor_coeff;
           this_score +=
               temp_accu_coeff *
-              (1 - stats_list[order_index + n].noise_var /
-                       AOMMAX(regions_list[this_reg].avg_intra_err, 0.001));
+              sqrt(AOMMAX(
+                  0.5, 1 - stats_list[order_index + n].noise_var /
+                               AOMMAX(stats_list[order_index + n].intra_error,
+                                      0.001)));
         }
 
         if (this_score > best_score) {
@@ -1309,7 +1313,7 @@ static std::vector<uint8_t> SetupDeltaQ(const TplFrameDepStats &frame_dep_stats,
       double beta = 1.0;
       if (mc_dep_cost > 0 && intra_cost > 0) {
         const double r0 = 1 / frame_importance;
-        const double rk = intra_cost / mc_dep_cost;
+        const double rk = intra_cost / (mc_dep_cost + intra_cost);
         beta = r0 / rk;
         assert(beta > 0.0);
       }
@@ -1519,34 +1523,8 @@ StatusOr<GopEncodeInfo> AV1RateControlQMode::GetGopEncodeInfoWithTpl(
 }
 
 StatusOr<GopEncodeInfo> AV1RateControlQMode::GetTplPassGopEncodeInfo(
-    const GopStruct &gop_struct) {
-  return GetGopEncodeInfoWithNoStats(gop_struct);
-}
-
-StatusOr<GopEncodeInfo> AV1RateControlQMode::GetTplPassGopEncodeInfo(
     const GopStruct &gop_struct, const FirstpassInfo &firstpass_info) {
   return GetGopEncodeInfoWithFp(gop_struct, firstpass_info);
-}
-
-StatusOr<GopEncodeInfo> AV1RateControlQMode::GetGopEncodeInfo(
-    const GopStruct &gop_struct, const TplGopStats &tpl_gop_stats,
-    const std::vector<LookaheadStats> &lookahead_stats,
-    const RefFrameTable &ref_frame_table_snapshot_init) {
-  Status status = ValidateTplStats(gop_struct, tpl_gop_stats);
-  if (!status.ok()) {
-    return status;
-  }
-
-  for (const auto &lookahead_stat : lookahead_stats) {
-    Status status = ValidateTplStats(*lookahead_stat.gop_struct,
-                                     *lookahead_stat.tpl_gop_stats);
-    if (!status.ok()) {
-      return status;
-    }
-  }
-
-  return GetGopEncodeInfoWithTpl(gop_struct, tpl_gop_stats, lookahead_stats,
-                                 ref_frame_table_snapshot_init);
 }
 
 StatusOr<GopEncodeInfo> AV1RateControlQMode::GetGopEncodeInfo(

@@ -1238,7 +1238,7 @@ if (aom_config("CONFIG_AV1_ENCODER") eq "yes") {
   # hamadard transform and satd for implmenting temporal dependency model
   #
   add_proto qw/void aom_hadamard_4x4/, "const int16_t *src_diff, ptrdiff_t src_stride, tran_low_t *coeff";
-  specialize qw/aom_hadamard_4x4 sse2/;
+  specialize qw/aom_hadamard_4x4 sse2 neon/;
 
   add_proto qw/void aom_hadamard_8x8/, "const int16_t *src_diff, ptrdiff_t src_stride, tran_low_t *coeff";
   specialize qw/aom_hadamard_8x8 sse2 neon/;
@@ -1247,7 +1247,7 @@ if (aom_config("CONFIG_AV1_ENCODER") eq "yes") {
   specialize qw/aom_hadamard_16x16 avx2 sse2 neon/;
 
   add_proto qw/void aom_hadamard_32x32/, "const int16_t *src_diff, ptrdiff_t src_stride, tran_low_t *coeff";
-  specialize qw/aom_hadamard_32x32 avx2 sse2/;
+  specialize qw/aom_hadamard_32x32 avx2 sse2 neon/;
 
   add_proto qw/void aom_hadamard_lp_8x8/, "const int16_t *src_diff, ptrdiff_t src_stride, int16_t *coeff";
   specialize qw/aom_hadamard_lp_8x8 sse2 neon/;

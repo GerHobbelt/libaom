@@ -15,6 +15,38 @@
 #include "aom_dsp/arm/mem_neon.h"
 #include "aom_dsp/arm/transpose_neon.h"
 
+static INLINE void hadamard_4x4_one_pass(int16x4_t *a0, int16x4_t *a1,
+                                         int16x4_t *a2, int16x4_t *a3) {
+  const int16x4_t b0 = vhadd_s16(*a0, *a1);
+  const int16x4_t b1 = vhsub_s16(*a0, *a1);
+  const int16x4_t b2 = vhadd_s16(*a2, *a3);
+  const int16x4_t b3 = vhsub_s16(*a2, *a3);
+
+  *a0 = vadd_s16(b0, b2);
+  *a1 = vadd_s16(b1, b3);
+  *a2 = vsub_s16(b0, b2);
+  *a3 = vsub_s16(b1, b3);
+}
+
+void aom_hadamard_4x4_neon(const int16_t *src_diff, ptrdiff_t src_stride,
+                           tran_low_t *coeff) {
+  int16x4_t a0 = vld1_s16(src_diff);
+  int16x4_t a1 = vld1_s16(src_diff + src_stride);
+  int16x4_t a2 = vld1_s16(src_diff + 2 * src_stride);
+  int16x4_t a3 = vld1_s16(src_diff + 3 * src_stride);
+
+  hadamard_4x4_one_pass(&a0, &a1, &a2, &a3);
+
+  transpose_s16_4x4d(&a0, &a1, &a2, &a3);
+
+  hadamard_4x4_one_pass(&a0, &a1, &a2, &a3);
+
+  store_s16_to_tran_low(coeff, a0);
+  store_s16_to_tran_low(coeff + 4, a1);
+  store_s16_to_tran_low(coeff + 8, a2);
+  store_s16_to_tran_low(coeff + 12, a3);
+}
+
 static void hadamard8x8_one_pass(int16x8_t *a0, int16x8_t *a1, int16x8_t *a2,
                                  int16x8_t *a3, int16x8_t *a4, int16x8_t *a5,
                                  int16x8_t *a6, int16x8_t *a7) {
@@ -193,5 +225,44 @@ void aom_hadamard_16x16_neon(const int16_t *src_diff, ptrdiff_t src_stride,
 
     t_coeff += 8;
     coeff += (4 + (((i >> 3) & 1) << 3));
+  }
+}
+
+void aom_hadamard_32x32_neon(const int16_t *src_diff, ptrdiff_t src_stride,
+                             tran_low_t *coeff) {
+  /* Top left first. */
+  aom_hadamard_16x16_neon(src_diff + 0 + 0 * src_stride, src_stride, coeff + 0);
+  /* Top right. */
+  aom_hadamard_16x16_neon(src_diff + 16 + 0 * src_stride, src_stride,
+                          coeff + 256);
+  /* Bottom left. */
+  aom_hadamard_16x16_neon(src_diff + 0 + 16 * src_stride, src_stride,
+                          coeff + 512);
+  /* Bottom right. */
+  aom_hadamard_16x16_neon(src_diff + 16 + 16 * src_stride, src_stride,
+                          coeff + 768);
+
+  for (int i = 0; i < 256; i += 8) {
+    const int16x8_t a0 = load_tran_low_to_s16q(coeff);
+    const int16x8_t a1 = load_tran_low_to_s16q(coeff + 256);
+    const int16x8_t a2 = load_tran_low_to_s16q(coeff + 512);
+    const int16x8_t a3 = load_tran_low_to_s16q(coeff + 768);
+
+    const int16x8_t b0 = vshrq_n_s16(vaddq_s16(a0, a1), 2);
+    const int16x8_t b1 = vshrq_n_s16(vsubq_s16(a0, a1), 2);
+    const int16x8_t b2 = vshrq_n_s16(vaddq_s16(a2, a3), 2);
+    const int16x8_t b3 = vshrq_n_s16(vsubq_s16(a2, a3), 2);
+
+    const int16x8_t c0 = vaddq_s16(b0, b2);
+    const int16x8_t c1 = vaddq_s16(b1, b3);
+    const int16x8_t c2 = vsubq_s16(b0, b2);
+    const int16x8_t c3 = vsubq_s16(b1, b3);
+
+    store_s16q_to_tran_low(coeff + 0, c0);
+    store_s16q_to_tran_low(coeff + 256, c1);
+    store_s16q_to_tran_low(coeff + 512, c2);
+    store_s16q_to_tran_low(coeff + 768, c3);
+
+    coeff += 8;
   }
 }
