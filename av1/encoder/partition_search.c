@@ -2301,7 +2301,8 @@ static void pick_sb_modes_nonrd(AV1_COMP *const cpi, TileDataEnc *tile_data,
     // here. Check to see is skipping cdef is allowed.
     const int allow_cdef_skipping =
         cpi->rc.frames_since_key > 10 && !cpi->rc.high_source_sad &&
-        !(x->color_sensitivity[0] || x->color_sensitivity[1]);
+        !(x->color_sensitivity[COLOR_SENS_IDX(AOM_PLANE_U)] ||
+          x->color_sensitivity[COLOR_SENS_IDX(AOM_PLANE_V)]);
 
     // Find the corresponding 64x64 block. It'll be the 128x128 block if that's
     // the block size.
@@ -2755,12 +2756,12 @@ static void direct_partition_merging(AV1_COMP *cpi, ThreadData *td,
       frame_mv[i][j].as_int = INVALID_MV;
     }
   }
-  x->color_sensitivity[0] = x->color_sensitivity_sb[0];
-  x->color_sensitivity[1] = x->color_sensitivity_sb[1];
+  av1_copy(x->color_sensitivity, x->color_sensitivity_sb);
   skip_pred_mv = (x->nonrd_prune_ref_frame_search > 2 &&
-                  x->color_sensitivity[0] != 2 && x->color_sensitivity[1] != 2);
+                  x->color_sensitivity[COLOR_SENS_IDX(AOM_PLANE_U)] != 2 &&
+                  x->color_sensitivity[COLOR_SENS_IDX(AOM_PLANE_V)] != 2);
 
-  find_predictors(cpi, x, ref_frame, frame_mv, tile_data, yv12_mb, bsize,
+  find_predictors(cpi, x, ref_frame, frame_mv, yv12_mb, bsize,
                   force_skip_low_temp_var, skip_pred_mv);
 
   int continue_merging = 1;
@@ -2776,8 +2777,8 @@ static void direct_partition_merging(AV1_COMP *cpi, ThreadData *td,
     // calling find_predictors() again.
     av1_set_offsets_without_segment_id(cpi, &tile_data->tile_info, x, mi_row,
                                        mi_col, this_mi[0]->bsize);
-    find_predictors(cpi, x, ref_frame, frame_mv, tile_data, yv12_mb,
-                    this_mi[0]->bsize, force_skip_low_temp_var, skip_pred_mv);
+    find_predictors(cpi, x, ref_frame, frame_mv, yv12_mb, this_mi[0]->bsize,
+                    force_skip_low_temp_var, skip_pred_mv);
   } else {
     struct scale_factors *sf = get_ref_scale_factors(cm, ref_frame);
     const int is_scaled = av1_is_scaled(sf);

@@ -555,6 +555,7 @@ static void set_allintra_speed_features_framesize_independent(
     sf->rt_sf.var_part_split_threshold_shift = 9;
     sf->rt_sf.vbp_prune_16x16_split_using_min_max_sub_blk_var = true;
     sf->rt_sf.prune_h_pred_using_best_mode_so_far = true;
+    sf->rt_sf.enable_intra_mode_pruning_using_neighbors = true;
   }
 
   // As the speed feature prune_chroma_modes_using_luma_winner already
@@ -1351,12 +1352,6 @@ static void set_rt_speed_feature_framesize_dependent(const AV1_COMP *const cpi,
     if (speed == 7) {
       sf->rt_sf.nonrd_check_partition_merge_mode = 2;
     }
-    if (speed >= 8) {
-      sf->rt_sf.estimate_motion_for_var_based_partition = 1;
-    }
-    if (speed >= 9) {
-      sf->rt_sf.estimate_motion_for_var_based_partition = 0;
-    }
   }
   if (!is_720p_or_larger) {
     if (speed >= 9) {
@@ -1753,7 +1748,6 @@ static void set_rt_speed_features_framesize_independent(AV1_COMP *cpi,
   if (speed >= 8) {
     sf->rt_sf.sse_early_term_inter_search = EARLY_TERM_IDX_2;
     sf->intra_sf.intra_pruning_with_hog = 1;
-    sf->rt_sf.estimate_motion_for_var_based_partition = 1;
     sf->rt_sf.short_circuit_low_temp_var = 1;
     sf->rt_sf.use_nonrd_altref_frame = 0;
     sf->rt_sf.nonrd_prune_ref_frame_search = 2;
@@ -2115,6 +2109,7 @@ static AOM_INLINE void init_rt_sf(REAL_TIME_SPEED_FEATURES *rt_sf) {
   rt_sf->prune_compoundmode_with_singlecompound_var = false;
   rt_sf->frame_level_mode_cost_update = false;
   rt_sf->prune_h_pred_using_best_mode_so_far = false;
+  rt_sf->enable_intra_mode_pruning_using_neighbors = false;
   rt_sf->check_only_zero_zeromv_on_large_blocks = false;
   rt_sf->disable_cdf_update_non_reference_frame = false;
   rt_sf->prune_compoundmode_with_singlemode_var = false;

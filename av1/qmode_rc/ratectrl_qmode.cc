@@ -22,6 +22,7 @@
 
 #include "aom/aom_codec.h"
 #include "av1/encoder/pass2_strategy.h"
+#include "av1/encoder/ratectrl.h"
 #include "av1/encoder/tpl_model.h"
 
 namespace aom {
@@ -1002,9 +1003,10 @@ Status ValidateTplStats(const GopStruct &gop_struct,
 }
 }  // namespace
 
-Status FillTplUnitDepStats(TplFrameDepStats &frame_dep_stats,
-                           const TplFrameStats &frame_stats,
-                           const std::vector<TplBlockStats> &block_stats_list) {
+Status FillTplUnitDepStats(
+    std::vector<std::vector<TplUnitDepStats>> &unit_stats,
+    const TplFrameStats &frame_stats,
+    const std::vector<TplBlockStats> &block_stats_list) {
   const int min_block_size = frame_stats.min_block_size;
   const int unit_rows =
       (frame_stats.frame_height + min_block_size - 1) / min_block_size;
@@ -1026,12 +1028,11 @@ Status FillTplUnitDepStats(TplFrameDepStats &frame_dep_stats,
     const int block_unit_cols = std::min(block_stats.width / min_block_size,
                                          unit_cols - block_unit_col);
     const int unit_count = block_unit_rows * block_unit_cols;
-    TplUnitDepStats unit_stats =
+    TplUnitDepStats this_unit_stats =
         TplBlockStatsToDepStats(block_stats, unit_count);
     for (int r = 0; r < block_unit_rows; r++) {
       for (int c = 0; c < block_unit_cols; c++) {
-        frame_dep_stats.unit_stats[block_unit_row + r][block_unit_col + c] =
-            unit_stats;
+        unit_stats[block_unit_row + r][block_unit_col + c] = this_unit_stats;
       }
     }
   }
@@ -1048,12 +1049,12 @@ StatusOr<TplFrameDepStats> CreateTplFrameDepStatsWithoutPropagation(
       frame_stats.frame_height, frame_stats.frame_width, min_block_size,
       !frame_stats.alternate_block_stats_list.empty());
 
-  Status status = FillTplUnitDepStats(frame_dep_stats, frame_stats,
+  Status status = FillTplUnitDepStats(frame_dep_stats.unit_stats, frame_stats,
                                       frame_stats.block_stats_list);
   if (!status.ok()) return status;
 
   if (!frame_stats.alternate_block_stats_list.empty()) {
-    status = FillTplUnitDepStats(frame_dep_stats, frame_stats,
+    status = FillTplUnitDepStats(frame_dep_stats.alt_unit_stats, frame_stats,
                                  frame_stats.alternate_block_stats_list);
     if (!status.ok()) return status;
     frame_dep_stats.rdcost =
@@ -1445,6 +1446,97 @@ static int GetRDMult(const GopFrame &gop_frame, int q_index) {
   }
 }
 
+// Check whether a frame (with index frame_index) uses candidate_reference as a
+// reference frame.
+bool CheckFrameUseReference(
+    int frame_index, const GopFrame &frame, const GopFrame &candidate_reference,
+    const std::vector<RefFrameTable> &ref_frame_table_list) {
+  if (frame.update_type == GopFrameType::kOverlay ||
+      frame.update_type == GopFrameType::kIntermediateOverlay) {
+    return false;
+  }
+  for (const auto &ref_frame : frame.ref_frame_list) {
+    if (ref_frame_table_list[frame_index][ref_frame.index].global_coding_idx ==
+        candidate_reference.global_coding_idx) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Returns the number of frames that use this_frame as reference in the
+// current and next subGop.
+int CountUsedAsReference(const GopStruct &gop_struct,
+                         const std::vector<LookaheadStats> &lookahead_stats,
+                         const std::vector<RefFrameTable> &ref_frame_table_list,
+                         const GopFrame &this_frame) {
+  int num = 0;
+  const int frame_count = static_cast<int>(gop_struct.gop_frame_list.size());
+  // Check frames in this gop
+  for (int i = 0; i < frame_count; ++i) {
+    if (CheckFrameUseReference(i, gop_struct.gop_frame_list[i], this_frame,
+                               ref_frame_table_list)) {
+      ++num;
+    }
+  }
+  // Check frames in the next gop
+  if (!lookahead_stats.empty()) {
+    const auto &next_gop_frame_list =
+        lookahead_stats[0].gop_struct[0].gop_frame_list;
+    const int next_gop_frame_count =
+        static_cast<int>(next_gop_frame_list.size());
+    for (int i = 0; i < next_gop_frame_count; ++i) {
+      if (CheckFrameUseReference(frame_count + i, next_gop_frame_list[i],
+                                 this_frame, ref_frame_table_list)) {
+        ++num;
+      }
+    }
+  }
+  return num;
+}
+
+int GetIntArfQ(const GopStruct &gop_struct,
+               const std::vector<LookaheadStats> &lookahead_stats,
+               const std::vector<RefFrameTable> &ref_frame_table_list,
+               const GopFrame &arf_frame, const GopFrame &int_arf_frame,
+               int active_best_quality, int active_worst_quality) {
+  if (!arf_frame.is_valid) return active_best_quality;
+  assert(int_arf_frame.is_valid);
+
+  // Check whether this is the first intermediate arf
+  bool is_first_int_arf = false;
+  for (const auto &gop_frame : gop_struct.gop_frame_list) {
+    if (gop_frame.update_type == GopFrameType::kIntermediateArf) {
+      is_first_int_arf =
+          gop_frame.global_coding_idx == int_arf_frame.global_coding_idx;
+      break;
+    }
+  }
+  if (is_first_int_arf) {
+    // int_arf_frame is the first intermediate arf in the subGop
+    int arf_as_ref = CountUsedAsReference(gop_struct, lookahead_stats,
+                                          ref_frame_table_list, arf_frame);
+    int int_arf_as_ref = CountUsedAsReference(
+        gop_struct, lookahead_stats, ref_frame_table_list, int_arf_frame);
+    int arf_adjusted =
+        arf_as_ref + static_cast<int>(int_arf_as_ref * kIntArfAdjFactor);
+    if (arf_adjusted <= int_arf_as_ref) {
+      return active_best_quality;
+    } else {
+      assert(arf_adjusted > 0);
+      return active_best_quality +
+             (active_worst_quality - active_best_quality) *
+                 (arf_adjusted - int_arf_as_ref) / arf_adjusted;
+    }
+  } else {
+    // int_arf_frame is not the first intermediate arf in the subGop
+    assert(int_arf_frame.layer_depth >= 1);
+    const int depth_factor = 1 << (int_arf_frame.layer_depth - 1);
+    return (active_worst_quality * (depth_factor - 1) + active_best_quality) /
+           depth_factor;
+  }
+}
+
 StatusOr<GopEncodeInfo> AV1RateControlQMode::GetGopEncodeInfoWithNoStats(
     const GopStruct &gop_struct) {
   GopEncodeInfo gop_encode_info;
@@ -1465,6 +1557,8 @@ StatusOr<GopEncodeInfo> AV1RateControlQMode::GetGopEncodeInfoWithNoStats(
           gop_frame.update_type == GopFrameType::kRegularKey ||
           gop_frame.update_type == GopFrameType::kRegularArf) {
         param.q_index = 5;
+        param.rdmult = av1_compute_rd_mult_based_on_qindex(
+            AOM_BITS_8, ARF_UPDATE, param.q_index);
       }
     }
     gop_encode_info.param_list.push_back(param);
@@ -1479,7 +1573,13 @@ bool CheckFlash(const std::vector<FIRSTPASS_STATS> &stats_list, int index) {
 
 StatusOr<GopEncodeInfo> AV1RateControlQMode::GetGopEncodeInfoWithFp(
     const GopStruct &gop_struct, const FirstpassInfo &firstpass_info,
-    const std::vector<LookaheadStats> &lookahead_stats) {
+    const std::vector<LookaheadStats> &lookahead_stats,
+    const RefFrameTable &ref_frame_table_snapshot_init) {
+  const std::vector<RefFrameTable> ref_frame_table_list = GetRefFrameTableList(
+      gop_struct, lookahead_stats, ref_frame_table_snapshot_init);
+  GopEncodeInfo gop_encode_info;
+  gop_encode_info.final_snapshot = ref_frame_table_list.back();
+
   const int stats_size = static_cast<int>(firstpass_info.stats_list.size());
   const FirstpassInfo analyzed_fp_info =
       AnalyzeFpStats(std::move(firstpass_info));
@@ -1496,7 +1596,7 @@ StatusOr<GopEncodeInfo> AV1RateControlQMode::GetGopEncodeInfoWithFp(
     return status;
   }
 
-  GopEncodeInfo gop_encode_info;
+  GopFrame arf_frame = GopFrameInvalid();
   const int frame_count = static_cast<int>(gop_struct.gop_frame_list.size());
   const int active_worst_quality = rc_param_.base_q_index;
   int active_best_quality = rc_param_.base_q_index;
@@ -1533,10 +1633,10 @@ StatusOr<GopEncodeInfo> AV1RateControlQMode::GetGopEncodeInfoWithFp(
       double boost = 0.0;
 
       // Check the influence of this arf frame to the frames before it
-      for (int f = this_gop_len - 1; f > 0; --f) {
+      for (int f = this_gop_len - 2; f > 0; --f) {
         // The contribution of this arf to frame f
         double coeff_this = 1.0;
-        for (int k = this_gop_len; k > f; --k) {
+        for (int k = this_gop_len - 1; k > f; --k) {
           if (CheckFlash(analyzed_fp_info.stats_list, k)) continue;
           coeff_this *= analyzed_fp_info.stats_list[k].cor_coeff;
         }
@@ -1566,10 +1666,10 @@ StatusOr<GopEncodeInfo> AV1RateControlQMode::GetGopEncodeInfoWithFp(
       }
 
       // Check the influence of this arf frame to the frames after it
-      for (int f = this_gop_len + 1; f < this_gop_len + next_gop_len; ++f) {
+      for (int f = this_gop_len; f < this_gop_len + next_gop_len; ++f) {
         // The contribution of this arf to frame f
         double coeff_this = 1.0;
-        for (int k = this_gop_len + 1; k <= f; ++k) {
+        for (int k = this_gop_len; k <= f; ++k) {
           if (CheckFlash(analyzed_fp_info.stats_list, k)) continue;
           coeff_this *= analyzed_fp_info.stats_list[k].cor_coeff;
         }
@@ -1577,7 +1677,7 @@ StatusOr<GopEncodeInfo> AV1RateControlQMode::GetGopEncodeInfoWithFp(
         if (next_gop_len >= 4) {
           // The contribution of next arf to frame f
           double coeff_next = 1.0;
-          for (int k = this_gop_len + next_gop_len; k > f; --k) {
+          for (int k = this_gop_len + next_gop_len - 1; k > f; --k) {
             if (CheckFlash(analyzed_fp_info.stats_list, k)) continue;
             coeff_next *= analyzed_fp_info.stats_list[k].cor_coeff;
           }
@@ -1605,13 +1705,14 @@ StatusOr<GopEncodeInfo> AV1RateControlQMode::GetGopEncodeInfoWithFp(
                                                        qstep_ratio, AOM_BITS_8);
       if (rc_param_.base_q_index) param.q_index = std::max(param.q_index, 1);
       active_best_quality = param.q_index;
+
+      if (gop_frame.update_type == GopFrameType::kRegularArf) {
+        arf_frame = gop_frame;
+      }
     } else {
-      // Intermediate ARFs
-      assert(gop_frame.layer_depth >= 1);
-      const int depth_factor = 1 << (gop_frame.layer_depth - 1);
-      param.q_index =
-          (active_worst_quality * (depth_factor - 1) + active_best_quality) /
-          depth_factor;
+      param.q_index = GetIntArfQ(gop_struct, lookahead_stats,
+                                 ref_frame_table_list, arf_frame, gop_frame,
+                                 active_best_quality, active_worst_quality);
     }
     param.rdmult = GetRDMult(gop_frame, param.q_index);
     gop_encode_info.param_list.push_back(param);
@@ -1717,6 +1818,7 @@ StatusOr<GopEncodeInfo> AV1RateControlQMode::GetGopEncodeInfoWithTpl(
         }
       }
     } else {
+      // TODO(b/259601830): Also consider using GetIntArfQ here.
       // Intermediate ARFs
       assert(gop_frame.layer_depth >= 1);
       const int depth_factor = 1 << (gop_frame.layer_depth - 1);
