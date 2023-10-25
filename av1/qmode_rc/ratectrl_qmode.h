@@ -26,6 +26,7 @@ constexpr int kLayerDepthOffset = 1;
 constexpr int kMinIntervalToAddArf = 3;
 constexpr int kMinArfInterval = (kMinIntervalToAddArf + 1) / 2;
 constexpr double kIntArfAdjFactor = 0.5;
+constexpr int kSecondTplPassQp = 5;
 
 struct TplUnitDepStats {
   double propagation_cost;
@@ -91,6 +92,10 @@ double TplFrameDepStatsAccumulateInterCost(
 
 double TplFrameDepStatsAccumulate(const TplFrameDepStats &frame_dep_stats);
 
+void TplFrameDepStatsBackTrace(int coding_idx,
+                               const RefFrameTable &ref_frame_table,
+                               TplGopDepStats *tpl_gop_dep_stats);
+
 void TplFrameDepStatsPropagate(int coding_idx,
                                const RefFrameTable &ref_frame_table,
                                TplGopDepStats *tpl_gop_dep_stats);
@@ -141,7 +146,8 @@ class AV1RateControlQMode : public AV1RateControlQModeInterface {
       const std::vector<LookaheadStats> &lookahead_stats,
       const RefFrameTable &ref_frame_table_snapshot_init);
   StatusOr<GopEncodeInfo> GetGopEncodeInfoWithTpl(
-      const GopStruct &gop_struct, const TplGopStats &tpl_gop_stats,
+      const GopStruct &gop_struct, const FirstpassInfo &firstpass_info,
+      const TplGopStats &tpl_gop_stats,
       const std::vector<LookaheadStats> &lookahead_stats,
       const RefFrameTable &ref_frame_table_snapshot_init);
 };

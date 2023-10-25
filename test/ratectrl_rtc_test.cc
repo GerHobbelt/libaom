@@ -37,7 +37,8 @@ class RcInterfaceTest : public ::libaom_test::EncoderTest,
  public:
   RcInterfaceTest()
       : EncoderTest(GET_PARAM(0)), aq_mode_(GET_PARAM(1)), key_interval_(3000),
-        encoder_exit_(false), layer_frame_cnt_(0) {
+        encoder_exit_(false), layer_frame_cnt_(0), superframe_cnt_(0),
+        dynamic_temporal_layers_(false), dynamic_spatial_layers_(false) {
     memset(&svc_params_, 0, sizeof(svc_params_));
     memset(&layer_id_, 0, sizeof(layer_id_));
   }
@@ -68,9 +69,11 @@ class RcInterfaceTest : public ::libaom_test::EncoderTest,
       frame_params_.spatial_layer_id =
           layer_frame_cnt_ % rc_cfg_.ss_number_layers;
       if (rc_cfg_.ts_number_layers == 3)
-        frame_params_.temporal_layer_id = kTemporalId3Layer[video->frame() % 4];
+        frame_params_.temporal_layer_id =
+            kTemporalId3Layer[superframe_cnt_ % 4];
       else if (rc_cfg_.ts_number_layers == 2)
-        frame_params_.temporal_layer_id = kTemporalId2Layer[video->frame() % 2];
+        frame_params_.temporal_layer_id =
+            kTemporalId2Layer[superframe_cnt_ % 2];
       else
         frame_params_.temporal_layer_id = 0;
       layer_id_.spatial_layer_id = frame_params_.spatial_layer_id;
@@ -81,6 +84,57 @@ class RcInterfaceTest : public ::libaom_test::EncoderTest,
     frame_params_.frame_type =
         layer_frame_cnt_ % key_int == 0 ? aom::kKeyFrame : aom::kInterFrame;
     encoder_exit_ = video->frame() == kNumFrames;
+    frame_flags_ = 0;
+
+    if (dynamic_temporal_layers_) {
+      if (superframe_cnt_ == 100 && layer_id_.spatial_layer_id == 0) {
+        // Go down to 2 temporal layers.
+        SetConfigSvc(3, 2);
+        encoder->Control(AV1E_SET_SVC_PARAMS, &svc_params_);
+        rc_api_->UpdateRateControl(rc_cfg_);
+      } else if (superframe_cnt_ == 200 && layer_id_.spatial_layer_id == 0) {
+        // Go down to 1 temporal layer.
+        SetConfigSvc(3, 1);
+        encoder->Control(AV1E_SET_SVC_PARAMS, &svc_params_);
+        rc_api_->UpdateRateControl(rc_cfg_);
+      } else if (superframe_cnt_ == 300 && layer_id_.spatial_layer_id == 0) {
+        // Go back up to 3 temporal layers.
+        SetConfigSvc(3, 3);
+        encoder->Control(AV1E_SET_SVC_PARAMS, &svc_params_);
+        rc_api_->UpdateRateControl(rc_cfg_);
+      }
+    } else if (dynamic_spatial_layers_) {
+      // In this example the #spatial layers is modified on the fly,
+      // so we go from (120p,240p,480p) to (240p,480p), etc.
+      if (superframe_cnt_ == 100 && layer_id_.spatial_layer_id == 0) {
+        // Change to 2 spatial layers (240p, 480p).
+        SetConfigSvc(2, 3);
+        encoder->Control(AV1E_SET_SVC_PARAMS, &svc_params_);
+        rc_api_->UpdateRateControl(rc_cfg_);
+      } else if (superframe_cnt_ == 200 && layer_id_.spatial_layer_id == 0) {
+        // Change to 1 spatial layer (480p).
+        SetConfigSvc(1, 3);
+        encoder->Control(AV1E_SET_SVC_PARAMS, &svc_params_);
+        rc_api_->UpdateRateControl(rc_cfg_);
+      } else if (superframe_cnt_ == 300 && layer_id_.spatial_layer_id == 0) {
+        // Go back to 3 spatial layers (120p, 240p, 480p).
+        SetConfigSvc(3, 3);
+        encoder->Control(AV1E_SET_SVC_PARAMS, &svc_params_);
+        // In the fixed SVC mode (which is what is used in this test):
+        // Key frame is required here on SL0 since 120p will try to predict
+        // from LAST which was the 480p, so decoder will throw an error
+        // (reference must be smaller than 4x4). In the flexible mode
+        // (not used here) we can set the frame flags to predict off the 2x2
+        // reference instead,
+        frame_flags_ = AOM_EFLAG_FORCE_KF;
+        frame_params_.frame_type = aom::kKeyFrame;
+        rc_api_->UpdateRateControl(rc_cfg_);
+      }
+    }
+    // TODO(marpan): Add dynamic spatial layers based on 0 layer bitrate.
+    // That is actual usage in SW where configuration (#spatial, #temporal)
+    // layers is fixed, but top layer is dropped or re-enabled based on
+    // bitrate. This requires external RC to handle dropped (zero-size) frames.
   }
 
   void PostEncodeFrameHook(::libaom_test::Encoder *encoder) override {
@@ -88,6 +142,8 @@ class RcInterfaceTest : public ::libaom_test::EncoderTest,
       return;
     }
     layer_frame_cnt_++;
+    if (layer_id_.spatial_layer_id == rc_cfg_.ss_number_layers - 1)
+      superframe_cnt_++;
     int qp;
     encoder->Control(AOME_GET_LAST_QUANTIZER, &qp);
     rc_api_->ComputeQP(frame_params_);
@@ -147,6 +203,34 @@ class RcInterfaceTest : public ::libaom_test::EncoderTest,
 
   void RunSvcPeriodicKey() {
     key_interval_ = 100;
+    SetConfigSvc(3, 3);
+    rc_api_ = aom::AV1RateControlRTC::Create(rc_cfg_);
+    frame_params_.spatial_layer_id = 0;
+    frame_params_.temporal_layer_id = 0;
+
+    ::libaom_test::I420VideoSource video("niklas_640_480_30.yuv", 640, 480, 30,
+                                         1, 0, kNumFrames);
+
+    ASSERT_NO_FATAL_FAILURE(RunLoop(&video));
+  }
+
+  void RunSvcDynamicTemporal() {
+    dynamic_temporal_layers_ = true;
+    key_interval_ = 10000;
+    SetConfigSvc(3, 3);
+    rc_api_ = aom::AV1RateControlRTC::Create(rc_cfg_);
+    frame_params_.spatial_layer_id = 0;
+    frame_params_.temporal_layer_id = 0;
+
+    ::libaom_test::I420VideoSource video("niklas_640_480_30.yuv", 640, 480, 30,
+                                         1, 0, kNumFrames);
+
+    ASSERT_NO_FATAL_FAILURE(RunLoop(&video));
+  }
+
+  void RunSvcDynamicSpatial() {
+    dynamic_spatial_layers_ = true;
+    key_interval_ = 10000;
     SetConfigSvc(3, 3);
     rc_api_ = aom::AV1RateControlRTC::Create(rc_cfg_);
     frame_params_.spatial_layer_id = 0;
@@ -334,6 +418,9 @@ class RcInterfaceTest : public ::libaom_test::EncoderTest,
   aom_svc_params_t svc_params_;
   aom_svc_layer_id_t layer_id_;
   int layer_frame_cnt_;
+  int superframe_cnt_;
+  bool dynamic_temporal_layers_;
+  bool dynamic_spatial_layers_;
 };
 
 TEST_P(RcInterfaceTest, OneLayer) { RunOneLayer(); }
@@ -343,6 +430,10 @@ TEST_P(RcInterfaceTest, OneLayerPeriodicKey) { RunOneLayerPeriodicKey(); }
 TEST_P(RcInterfaceTest, Svc) { RunSvc(); }
 
 TEST_P(RcInterfaceTest, SvcPeriodicKey) { RunSvcPeriodicKey(); }
+
+TEST_P(RcInterfaceTest, SvcDynamicTemporal) { RunSvcDynamicTemporal(); }
+
+TEST_P(RcInterfaceTest, SvcDynamicSpatial) { RunSvcDynamicSpatial(); }
 
 AV1_INSTANTIATE_TEST_SUITE(RcInterfaceTest, ::testing::Values(0, 3));
 

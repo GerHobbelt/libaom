@@ -1311,7 +1311,7 @@ if (aom_config("CONFIG_AV1_ENCODER") eq "yes") {
   specialize qw/aom_get_var_sse_sum_8x8_quad        avx2 sse2 neon/;
 
   add_proto qw/void aom_get_var_sse_sum_16x16_dual/, "const uint8_t *src_ptr, int source_stride, const uint8_t *ref_ptr, int ref_stride, uint32_t *sse16x16, unsigned int *tot_sse, int *tot_sum, uint32_t *var16x16";
-  specialize qw/aom_get_var_sse_sum_16x16_dual        avx2/;
+  specialize qw/aom_get_var_sse_sum_16x16_dual        avx2 sse2 neon/;
 
   add_proto qw/unsigned int aom_mse16x16/, "const uint8_t *src_ptr, int  source_stride, const uint8_t *ref_ptr, int  recon_stride, unsigned int *sse";
   add_proto qw/unsigned int aom_mse16x8/, "const uint8_t *src_ptr, int  source_stride, const uint8_t *ref_ptr, int  recon_stride, unsigned int *sse";
@@ -2039,7 +2039,7 @@ if (aom_config("CONFIG_AV1_ENCODER") eq "yes") {
 
   # Flow estimation library
   if (aom_config("CONFIG_REALTIME_ONLY") ne "yes") {
-    add_proto qw/double av1_compute_cross_correlation/, "unsigned char *im1, int stride1, int x1, int y1, unsigned char *im2, int stride2, int x2, int y2";
+    add_proto qw/double av1_compute_cross_correlation/, "const unsigned char *im1, int stride1, int x1, int y1, const unsigned char *im2, int stride2, int x2, int y2";
     specialize qw/av1_compute_cross_correlation sse4_1 avx2/;
   }
 

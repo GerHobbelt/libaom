@@ -27,6 +27,7 @@
 #include "av1/encoder/ethread.h"
 #include "av1/encoder/external_partition.h"
 #include "av1/encoder/firstpass.h"
+#include "av1/encoder/rc_utils.h"
 #include "av1/arg_defs.h"
 
 #include "common/args_helper.h"
@@ -2518,19 +2519,28 @@ aom_codec_err_t av1_create_context_and_bufferpool(AV1_PRIMARY *ppi,
                                                   COMPRESSOR_STAGE stage,
                                                   int lap_lag_in_frames) {
   aom_codec_err_t res = AOM_CODEC_OK;
+  BufferPool *buffer_pool = *p_buffer_pool;
 
-  if (*p_buffer_pool == NULL) {
-    *p_buffer_pool = (BufferPool *)aom_calloc(1, sizeof(BufferPool));
-    if (*p_buffer_pool == NULL) return AOM_CODEC_MEM_ERROR;
-
+  if (buffer_pool == NULL) {
+    buffer_pool = (BufferPool *)aom_calloc(1, sizeof(BufferPool));
+    if (buffer_pool == NULL) return AOM_CODEC_MEM_ERROR;
+    *p_buffer_pool = buffer_pool;
+    buffer_pool->num_frame_bufs =
+        (oxcf->mode == ALLINTRA) ? FRAME_BUFFERS_ALLINTRA : FRAME_BUFFERS;
+    buffer_pool->frame_bufs = (RefCntBuffer *)aom_calloc(
+        buffer_pool->num_frame_bufs, sizeof(*buffer_pool->frame_bufs));
+    if (buffer_pool->frame_bufs == NULL) {
+      buffer_pool->num_frame_bufs = 0;
+      return AOM_CODEC_MEM_ERROR;
+    }
 #if CONFIG_MULTITHREAD
-    if (pthread_mutex_init(&((*p_buffer_pool)->pool_mutex), NULL)) {
+    if (pthread_mutex_init(&buffer_pool->pool_mutex, NULL)) {
       return AOM_CODEC_MEM_ERROR;
     }
 #endif
   }
-  *p_cpi = av1_create_compressor(ppi, oxcf, *p_buffer_pool, stage,
-                                 lap_lag_in_frames);
+  *p_cpi =
+      av1_create_compressor(ppi, oxcf, buffer_pool, stage, lap_lag_in_frames);
   if (*p_cpi == NULL) res = AOM_CODEC_MEM_ERROR;
 
   return res;
@@ -2947,7 +2957,7 @@ static aom_codec_err_t encoder_encode(aom_codec_alg_priv_t *ctx,
             subsampling_x, subsampling_y, use_highbitdepth, lag_in_frames,
             src_border_in_pixels, cpi->common.features.byte_alignment,
             ctx->num_lap_buffers, (cpi->oxcf.kf_cfg.key_freq_max == 0),
-            cpi->oxcf.tool_cfg.enable_global_motion);
+            cpi->image_pyramid_levels);
       }
       if (!ppi->lookahead)
         aom_internal_error(&ppi->error, AOM_CODEC_MEM_ERROR,
@@ -3417,6 +3427,7 @@ static aom_codec_err_t ctrl_set_svc_params(aom_codec_alg_priv_t *ctx,
   AV1_PRIMARY *const ppi = ctx->ppi;
   AV1_COMP *const cpi = ppi->cpi;
   AV1_COMMON *const cm = &cpi->common;
+  AV1EncoderConfig *oxcf = &cpi->oxcf;
   aom_svc_params_t *const params = va_arg(args, aom_svc_params_t *);
   int64_t target_bandwidth = 0;
   ppi->number_spatial_layers = params->number_spatial_layers;
@@ -3453,7 +3464,10 @@ static aom_codec_err_t ctrl_set_svc_params(aom_codec_alg_priv_t *ctx,
       }
       av1_init_layer_context(cpi);
     }
+    oxcf->rc_cfg.target_bandwidth = target_bandwidth;
+    set_primary_rc_buffer_sizes(oxcf, cpi->ppi);
     av1_update_layer_context_change_config(cpi, target_bandwidth);
+    check_reset_rc_flag(cpi);
   }
   av1_check_fpmt_config(ctx->ppi, &ctx->ppi->cpi->oxcf);
   return AOM_CODEC_OK;

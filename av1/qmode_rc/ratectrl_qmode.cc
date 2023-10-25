@@ -1147,6 +1147,87 @@ double GetPropagationFraction(const TplUnitDepStats &unit_dep_stats) {
          ModifyDivisor(unit_dep_stats.intra_cost);
 }
 
+void TplFrameDepStatsBackTrace(int coding_idx,
+                               const RefFrameTable &ref_frame_table,
+                               TplGopDepStats *tpl_gop_dep_stats) {
+  assert(!tpl_gop_dep_stats->frame_dep_stats_list.empty());
+  TplFrameDepStats *frame_dep_stats =
+      &tpl_gop_dep_stats->frame_dep_stats_list[coding_idx];
+
+  if (frame_dep_stats->unit_stats.empty()) return;
+  if (frame_dep_stats->alt_unit_stats.empty()) return;
+
+  const int unit_size = frame_dep_stats->unit_size;
+  const int frame_unit_rows =
+      static_cast<int>(frame_dep_stats->unit_stats.size());
+  const int frame_unit_cols =
+      static_cast<int>(frame_dep_stats->unit_stats[0].size());
+  for (int unit_row = 0; unit_row < frame_unit_rows; ++unit_row) {
+    for (int unit_col = 0; unit_col < frame_unit_cols; ++unit_col) {
+      TplUnitDepStats &unit_dep_stats =
+          frame_dep_stats->unit_stats[unit_row][unit_col];
+      TplUnitDepStats &alt_unit_dep_stats =
+          frame_dep_stats->alt_unit_stats[unit_row][unit_col];
+
+      int ref_coding_idx_list[kBlockRefCount] = { -1, -1 };
+      int ref_frame_count = GetRefCodingIdxList(
+          alt_unit_dep_stats, ref_frame_table, ref_coding_idx_list);
+      if (ref_frame_count == 0) continue;
+      MotionVector base_mv[2] = { alt_unit_dep_stats.mv[0],
+                                  alt_unit_dep_stats.mv[1] };
+      for (int i = 0; i < kBlockRefCount; ++i) {
+        if (ref_coding_idx_list[i] == -1) continue;
+        assert(
+            ref_coding_idx_list[i] <
+            static_cast<int>(tpl_gop_dep_stats->frame_dep_stats_list.size()));
+        TplFrameDepStats &ref_frame_dep_stats =
+            tpl_gop_dep_stats->frame_dep_stats_list[ref_coding_idx_list[i]];
+        assert(!ref_frame_dep_stats.alt_unit_stats.empty());
+        const auto &mv = base_mv[i];
+        const int mv_row = GetFullpelValue(mv.row, mv.subpel_bits);
+        const int mv_col = GetFullpelValue(mv.col, mv.subpel_bits);
+        const int ref_pixel_r = unit_row * unit_size + mv_row;
+        const int ref_pixel_c = unit_col * unit_size + mv_col;
+        const int ref_unit_row_low =
+            (unit_row * unit_size + mv_row) / unit_size;
+        const int ref_unit_col_low =
+            (unit_col * unit_size + mv_col) / unit_size;
+
+        for (int j = 0; j < 2; ++j) {
+          for (int k = 0; k < 2; ++k) {
+            const int ref_unit_row = ref_unit_row_low + j;
+            const int ref_unit_col = ref_unit_col_low + k;
+            if (ref_unit_row >= 0 && ref_unit_row < frame_unit_rows &&
+                ref_unit_col >= 0 && ref_unit_col < frame_unit_cols) {
+              const int overlap_area = GetBlockOverlapArea(
+                  ref_pixel_r, ref_pixel_c, ref_unit_row * unit_size,
+                  ref_unit_col * unit_size, unit_size);
+              const double overlap_ratio =
+                  overlap_area * 1.0 / (unit_size * unit_size);
+              const double propagation_ratio =
+                  1.0 / ref_frame_count * overlap_ratio;
+              TplUnitDepStats &alt_ref_unit_stats =
+                  ref_frame_dep_stats
+                      .alt_unit_stats[ref_unit_row][ref_unit_col];
+              alt_ref_unit_stats.propagation_cost +=
+                  (alt_unit_dep_stats.inter_cost +
+                   alt_unit_dep_stats.propagation_cost) *
+                  propagation_ratio;
+
+              TplUnitDepStats &ref_unit_stats =
+                  ref_frame_dep_stats.unit_stats[ref_unit_row][ref_unit_col];
+              ref_unit_stats.propagation_cost +=
+                  (unit_dep_stats.inter_cost +
+                   unit_dep_stats.propagation_cost) *
+                  propagation_ratio;
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
 void TplFrameDepStatsPropagate(int coding_idx,
                                const RefFrameTable &ref_frame_table,
                                TplGopDepStats *tpl_gop_dep_stats) {
@@ -1306,7 +1387,17 @@ StatusOr<TplGopDepStats> ComputeTplGopDepStats(
     auto &ref_frame_table = ref_frame_table_list[coding_idx];
     // TODO(angiebird): Handle/test the case where reference frame
     // is in the previous GOP
-    TplFrameDepStatsPropagate(coding_idx, ref_frame_table, &tpl_gop_dep_stats);
+
+    if (tpl_frame_stats_list_with_lookahead[coding_idx]
+            ->alternate_block_stats_list.empty()) {
+      // One pass TPL run
+      TplFrameDepStatsPropagate(coding_idx, ref_frame_table,
+                                &tpl_gop_dep_stats);
+    } else {
+      // Two pass TPL runs
+      TplFrameDepStatsBackTrace(coding_idx, ref_frame_table,
+                                &tpl_gop_dep_stats);
+    }
   }
   return tpl_gop_dep_stats;
 }
@@ -1314,7 +1405,8 @@ StatusOr<TplGopDepStats> ComputeTplGopDepStats(
 static std::vector<uint8_t> SetupDeltaQ(const TplFrameDepStats &frame_dep_stats,
                                         int frame_width, int frame_height,
                                         int base_qindex,
-                                        double frame_importance) {
+                                        double frame_importance,
+                                        bool use_twopass_data) {
   // TODO(jianj) : Add support to various superblock sizes.
   const int sb_size = 64;
   const int delta_q_res = 4;
@@ -1326,6 +1418,40 @@ static std::vector<uint8_t> SetupDeltaQ(const TplFrameDepStats &frame_dep_stats,
   const int unit_cols =
       (frame_width + frame_dep_stats.unit_size - 1) / frame_dep_stats.unit_size;
   std::vector<uint8_t> superblock_q_indices;
+
+  if (use_twopass_data) {
+    // Cumulate frame level stats
+    double cum_inter_cost = 0;
+    double cum_rdcost_diff = 0;
+    for (int sb_row = 0; sb_row < sb_rows; ++sb_row) {
+      for (int sb_col = 0; sb_col < sb_cols; ++sb_col) {
+        const int unit_row_start = sb_row * num_unit_per_sb;
+        const int unit_row_end =
+            std::min((sb_row + 1) * num_unit_per_sb, unit_rows);
+        const int unit_col_start = sb_col * num_unit_per_sb;
+        const int unit_col_end =
+            std::min((sb_col + 1) * num_unit_per_sb, unit_cols);
+        // A simplified version of av1_get_q_for_deltaq_objective()
+        for (int unit_row = unit_row_start; unit_row < unit_row_end;
+             ++unit_row) {
+          for (int unit_col = unit_col_start; unit_col < unit_col_end;
+               ++unit_col) {
+            const TplUnitDepStats &unit_dep_stats =
+                frame_dep_stats.unit_stats[unit_row][unit_col];
+            const TplUnitDepStats &alt_unit_dep_stats =
+                frame_dep_stats.alt_unit_stats[unit_row][unit_col];
+            cum_inter_cost += unit_dep_stats.inter_cost;
+            cum_rdcost_diff += (unit_dep_stats.propagation_cost -
+                                alt_unit_dep_stats.propagation_cost);
+          }
+        }
+      }
+    }
+    frame_importance = cum_inter_cost > 0
+                           ? (cum_rdcost_diff + cum_inter_cost) / cum_inter_cost
+                           : -1.0;
+  }
+
   // Calculate delta_q offset for each superblock.
   for (int sb_row = 0; sb_row < sb_rows; ++sb_row) {
     for (int sb_col = 0; sb_col < sb_cols; ++sb_col) {
@@ -1341,15 +1467,21 @@ static std::vector<uint8_t> SetupDeltaQ(const TplFrameDepStats &frame_dep_stats,
       for (int unit_row = unit_row_start; unit_row < unit_row_end; ++unit_row) {
         for (int unit_col = unit_col_start; unit_col < unit_col_end;
              ++unit_col) {
-          const TplUnitDepStats &unit_dep_stat =
+          const TplUnitDepStats &unit_dep_stats =
               frame_dep_stats.unit_stats[unit_row][unit_col];
-          intra_cost += unit_dep_stat.intra_cost;
-          mc_dep_cost += unit_dep_stat.propagation_cost;
+          intra_cost += unit_dep_stats.inter_cost;
+          mc_dep_cost += unit_dep_stats.propagation_cost;
+
+          if (use_twopass_data) {
+            const TplUnitDepStats &alt_unit_dep_stats =
+                frame_dep_stats.alt_unit_stats[unit_row][unit_col];
+            mc_dep_cost -= alt_unit_dep_stats.propagation_cost;
+          }
         }
       }
 
       double beta = 1.0;
-      if (mc_dep_cost > 0 && intra_cost > 0) {
+      if (frame_importance > 0 && mc_dep_cost > 0 && intra_cost > 0) {
         const double r0 = 1 / frame_importance;
         const double rk = intra_cost / (mc_dep_cost + intra_cost);
         beta = r0 / rk;
@@ -1556,7 +1688,7 @@ StatusOr<GopEncodeInfo> AV1RateControlQMode::GetGopEncodeInfoWithNoStats(
       if (gop_frame.update_type == GopFrameType::kRegularGolden ||
           gop_frame.update_type == GopFrameType::kRegularKey ||
           gop_frame.update_type == GopFrameType::kRegularArf) {
-        param.q_index = 5;
+        param.q_index = kSecondTplPassQp;
         param.rdmult = av1_compute_rd_mult_based_on_qindex(
             AOM_BITS_8, ARF_UPDATE, param.q_index);
       }
@@ -1569,6 +1701,133 @@ StatusOr<GopEncodeInfo> AV1RateControlQMode::GetGopEncodeInfoWithNoStats(
 bool CheckFlash(const std::vector<FIRSTPASS_STATS> &stats_list, int index) {
   assert(index >= 1);
   return stats_list[index].is_flash || stats_list[index - 1].is_flash;
+}
+
+void inline SetUpFrameIndices(GopFrameType update_type, int stats_size,
+                              int this_gop_len, int next_gop_len,
+                              int &this_index, int &first_index,
+                              int &last_index, int &ref_before_index,
+                              int &ref_after_index) {
+  if (update_type == GopFrameType::kRegularKey) {
+    this_index = 0;
+    first_index = 1;
+    last_index = stats_size - 1;
+    ref_before_index = -1;
+    ref_after_index = -1;
+  } else if (update_type == GopFrameType::kRegularGolden) {
+    // TODO(b/260859962): Need to consider the situation when arf is not
+    // used
+    this_index = 0;
+    first_index = 1;
+    last_index = this_gop_len - 2;
+    ref_before_index = -1;
+    ref_after_index = this_gop_len - 1;
+  } else {
+    // arf type
+    // TODO(b/260859962): It looks like in this case the last arf should
+    // actually be at index -1. This for now should be accurate enough, but
+    // in the future it is better to have the exact index of last arf.
+    this_index = this_gop_len - 1;
+    first_index = 1;
+    last_index = next_gop_len >= 4 ? this_gop_len + next_gop_len - 2
+                                   : this_gop_len + next_gop_len - 1;
+    ref_before_index = 0;
+    ref_after_index = next_gop_len >= 4 ? this_gop_len + next_gop_len - 1 : -1;
+  }
+}
+
+// Return the accumulated score of a frame, considering its influence on the
+// frames from first_index to last_index (both inclusive). When ref_before_index
+// >= 0, only consider the frames where the current frame has a larger
+// correlation than the frame at ref_before_index. Same for ref_after_index.
+// This function also calculates and returns the average correlation coefficient
+// of this frame to the affected frames through the parameter avg_correlation.
+double GetAccumulatedScore(const FirstpassInfo &firstpass_info, int this_index,
+                           int first_index, int last_index,
+                           int ref_before_index, int ref_after_index,
+                           double &avg_correlation) {
+  assert(ref_before_index < 0 || ref_before_index < first_index);
+  assert(ref_after_index < 0 || ref_after_index > last_index);
+  double score = 0.0;
+  int count = 0;
+  avg_correlation = 0.0;
+  // Check the influence of this frame to the frames before it
+  for (int f = this_index - 1; f >= first_index; --f) {
+    // The contribution of this frame to frame f
+    double coeff_this = 1.0;
+    for (int k = this_index; k > f; --k) {
+      if (CheckFlash(firstpass_info.stats_list, k)) continue;
+      coeff_this *= firstpass_info.stats_list[k].cor_coeff;
+    }
+    // The contribution of frame at ref_before_index to frame f
+    if (ref_before_index >= 0) {
+      double coeff_last = 1.0;
+      for (int k = ref_before_index + 1; k <= f; ++k) {
+        if (CheckFlash(firstpass_info.stats_list, k)) continue;
+        coeff_last *= firstpass_info.stats_list[k].cor_coeff;
+      }
+      if (coeff_last > coeff_this) break;
+    }
+    ++count;
+    avg_correlation += firstpass_info.stats_list[f + 1].cor_coeff;
+
+    // If this is a flash, although we ignore it in the accumulation, we
+    // still count it for this frame so it will probably have a low
+    // correlation
+    if (firstpass_info.stats_list[f].is_flash)
+      coeff_this *= firstpass_info.stats_list[f].cor_coeff;
+
+    const double this_cor =
+        coeff_this * sqrt(std::max((firstpass_info.stats_list[f].intra_error -
+                                    firstpass_info.stats_list[f].noise_var) /
+                                       firstpass_info.stats_list[f].intra_error,
+                                   0.5));
+    score += this_cor;
+  }
+
+  // Check the influence of this frame to the frames after it
+  for (int f = this_index + 1; f <= last_index; ++f) {
+    // The contribution of this frame to frame f
+    double coeff_this = 1.0;
+    for (int k = this_index + 1; k <= f; ++k) {
+      if (CheckFlash(firstpass_info.stats_list, k)) continue;
+      coeff_this *= firstpass_info.stats_list[k].cor_coeff;
+    }
+
+    // The contribution of frame at ref_after_index to frame f
+    if (ref_after_index >= 0) {
+      double coeff_next = 1.0;
+      for (int k = ref_after_index; k > f; --k) {
+        if (CheckFlash(firstpass_info.stats_list, k)) continue;
+        coeff_next *= firstpass_info.stats_list[k].cor_coeff;
+      }
+      if (coeff_next > coeff_this) break;
+    }
+    ++count;
+    avg_correlation += firstpass_info.stats_list[f].cor_coeff;
+
+    // If this is a flash, although we ignore it in the accumulation, we
+    // still count it for this frame so it will probably have a low
+    // correlation
+    if (firstpass_info.stats_list[f].is_flash)
+      coeff_this *= firstpass_info.stats_list[f].cor_coeff;
+
+    const double this_cor =
+        coeff_this * sqrt(std::max((firstpass_info.stats_list[f].intra_error -
+                                    firstpass_info.stats_list[f].noise_var) /
+                                       firstpass_info.stats_list[f].intra_error,
+                                   0.5));
+    score += this_cor;
+  }
+  if (count > 0) avg_correlation /= static_cast<double>(count);
+  return score;
+}
+
+int AdjustStaticQp(double avg_correlation, double score, int q_index) {
+  if (avg_correlation < 0.99) return q_index;
+  const double factor = q_index * score / 400 + 1.0;
+
+  return static_cast<int>(q_index / factor);
 }
 
 StatusOr<GopEncodeInfo> AV1RateControlQMode::GetGopEncodeInfoWithFp(
@@ -1607,102 +1866,27 @@ StatusOr<GopEncodeInfo> AV1RateControlQMode::GetGopEncodeInfoWithFp(
         gop_frame.update_type == GopFrameType::kIntermediateOverlay ||
         gop_frame.update_type == GopFrameType::kRegularLeaf) {
       param.q_index = rc_param_.base_q_index;
-    } else if (gop_frame.update_type == GopFrameType::kRegularKey) {
-      // Accumulate correlation coefficients to determine KF boost
-      double boost = 0.0;
-      double coeff_kf = 1.0;
-      for (int i = 1; i < stats_size; ++i) {
-        if (CheckFlash(analyzed_fp_info.stats_list, i)) continue;
-        coeff_kf *= analyzed_fp_info.stats_list[i].cor_coeff;
-        const double this_cor =
-            coeff_kf *
-            sqrt(std::max((analyzed_fp_info.stats_list[i].intra_error -
-                           analyzed_fp_info.stats_list[i].noise_var) /
-                              analyzed_fp_info.stats_list[i].intra_error,
-                          0.5));
-        boost += this_cor;
-      }
-      boost = std::min(std::max(sqrt(boost), 1.0), 6.0);
-      const double qstep_ratio = 1.0 / boost;
-      param.q_index = av1_get_q_index_from_qstep_ratio(rc_param_.base_q_index,
-                                                       qstep_ratio, AOM_BITS_8);
-      if (rc_param_.base_q_index) param.q_index = std::max(param.q_index, 1);
-      active_best_quality = param.q_index;
-    } else if (gop_frame.update_type == GopFrameType::kRegularGolden ||
+    } else if (gop_frame.update_type == GopFrameType::kRegularKey ||
+               gop_frame.update_type == GopFrameType::kRegularGolden ||
                gop_frame.update_type == GopFrameType::kRegularArf) {
-      double boost = 0.0;
+      int this_index, first_index, last_index, ref_before_index,
+          ref_after_index;
+      SetUpFrameIndices(gop_frame.update_type, stats_size, this_gop_len,
+                        next_gop_len, this_index, first_index, last_index,
+                        ref_before_index, ref_after_index);
 
-      // Check the influence of this arf frame to the frames before it
-      for (int f = this_gop_len - 2; f > 0; --f) {
-        // The contribution of this arf to frame f
-        double coeff_this = 1.0;
-        for (int k = this_gop_len - 1; k > f; --k) {
-          if (CheckFlash(analyzed_fp_info.stats_list, k)) continue;
-          coeff_this *= analyzed_fp_info.stats_list[k].cor_coeff;
-        }
-
-        // The contribution of last arf to frame f
-        double coeff_last = 1.0;
-        for (int k = 1; k <= f; ++k) {
-          if (CheckFlash(analyzed_fp_info.stats_list, k)) continue;
-          coeff_last *= analyzed_fp_info.stats_list[k].cor_coeff;
-        }
-
-        if (coeff_last > coeff_this) break;
-
-        // If this is a flash, although we ignore it in the accumulation, we
-        // still count it for this frame so it will probably have a low
-        // correlation
-        if (analyzed_fp_info.stats_list[f].is_flash)
-          coeff_this *= analyzed_fp_info.stats_list[f].cor_coeff;
-
-        const double this_cor =
-            coeff_this *
-            sqrt(std::max((analyzed_fp_info.stats_list[f].intra_error -
-                           analyzed_fp_info.stats_list[f].noise_var) /
-                              analyzed_fp_info.stats_list[f].intra_error,
-                          0.5));
-        boost += this_cor;
-      }
-
-      // Check the influence of this arf frame to the frames after it
-      for (int f = this_gop_len; f < this_gop_len + next_gop_len; ++f) {
-        // The contribution of this arf to frame f
-        double coeff_this = 1.0;
-        for (int k = this_gop_len; k <= f; ++k) {
-          if (CheckFlash(analyzed_fp_info.stats_list, k)) continue;
-          coeff_this *= analyzed_fp_info.stats_list[k].cor_coeff;
-        }
-
-        if (next_gop_len >= 4) {
-          // The contribution of next arf to frame f
-          double coeff_next = 1.0;
-          for (int k = this_gop_len + next_gop_len - 1; k > f; --k) {
-            if (CheckFlash(analyzed_fp_info.stats_list, k)) continue;
-            coeff_next *= analyzed_fp_info.stats_list[k].cor_coeff;
-          }
-          if (coeff_next > coeff_this) break;
-        }
-
-        // If this is a flash, although we ignore it in the accumulation, we
-        // still count it for this frame so it will probably have a low
-        // correlation
-        if (analyzed_fp_info.stats_list[f].is_flash)
-          coeff_this *= analyzed_fp_info.stats_list[f].cor_coeff;
-
-        const double this_cor =
-            coeff_this *
-            sqrt(std::max((analyzed_fp_info.stats_list[f].intra_error -
-                           analyzed_fp_info.stats_list[f].noise_var) /
-                              analyzed_fp_info.stats_list[f].intra_error,
-                          0.5));
-
-        boost += this_cor;
-      }
-      boost = std::min(std::max(sqrt(boost), 1.0), 4.0);
+      double avg_correlation = 0;
+      const double score = GetAccumulatedScore(
+          analyzed_fp_info, this_index, first_index, last_index,
+          ref_before_index, ref_after_index, avg_correlation);
+      const double boost = std::min(
+          std::max(sqrt(score), 1.0),
+          gop_frame.update_type == GopFrameType::kRegularKey ? 6.0 : 4.0);
       const double qstep_ratio = 1.0 / boost;
       param.q_index = av1_get_q_index_from_qstep_ratio(rc_param_.base_q_index,
                                                        qstep_ratio, AOM_BITS_8);
+      param.q_index = AdjustStaticQp(avg_correlation, score, param.q_index);
+
       if (rc_param_.base_q_index) param.q_index = std::max(param.q_index, 1);
       active_best_quality = param.q_index;
 
@@ -1721,7 +1905,8 @@ StatusOr<GopEncodeInfo> AV1RateControlQMode::GetGopEncodeInfoWithFp(
 }
 
 StatusOr<GopEncodeInfo> AV1RateControlQMode::GetGopEncodeInfoWithTpl(
-    const GopStruct &gop_struct, const TplGopStats &tpl_gop_stats,
+    const GopStruct &gop_struct, const FirstpassInfo &firstpass_info,
+    const TplGopStats &tpl_gop_stats,
     const std::vector<LookaheadStats> &lookahead_stats,
     const RefFrameTable &ref_frame_table_snapshot_init) {
   const std::vector<RefFrameTable> ref_frame_table_list = GetRefFrameTableList(
@@ -1736,6 +1921,23 @@ StatusOr<GopEncodeInfo> AV1RateControlQMode::GetGopEncodeInfoWithTpl(
   }
   const int frame_count =
       static_cast<int>(tpl_gop_stats.frame_stats_list.size());
+
+  const int stats_size = static_cast<int>(firstpass_info.stats_list.size());
+  const FirstpassInfo analyzed_fp_info =
+      AnalyzeFpStats(std::move(firstpass_info));
+
+  const int this_gop_len = gop_struct.show_frame_count;
+  const int next_gop_len =
+      lookahead_stats.empty()
+          ? 0
+          : lookahead_stats[0].gop_struct[0].show_frame_count;
+  if (stats_size < this_gop_len + next_gop_len) {
+    Status status;
+    status.code = AOM_CODEC_INVALID_PARAM;
+    status.message = "The firstpass info length is insufficient.";
+    return status;
+  }
+
   const int active_worst_quality = rc_param_.base_q_index;
   int active_best_quality = rc_param_.base_q_index;
 
@@ -1796,13 +1998,27 @@ StatusOr<GopEncodeInfo> AV1RateControlQMode::GetGopEncodeInfoWithTpl(
       const double qstep_ratio = sqrt(1 / frame_importance);
       param.q_index = av1_get_q_index_from_qstep_ratio(rc_param_.base_q_index,
                                                        qstep_ratio, AOM_BITS_8);
+      int this_index, first_index, last_index, ref_before_index,
+          ref_after_index;
+      SetUpFrameIndices(gop_frame.update_type, stats_size, this_gop_len,
+                        next_gop_len, this_index, first_index, last_index,
+                        ref_before_index, ref_after_index);
+
+      double avg_correlation = 0;
+      const double score = GetAccumulatedScore(
+          analyzed_fp_info, this_index, first_index, last_index,
+          ref_before_index, ref_after_index, avg_correlation);
+      param.q_index = AdjustStaticQp(avg_correlation, score, param.q_index);
+
       if (rc_param_.base_q_index) param.q_index = AOMMAX(param.q_index, 1);
       active_best_quality = param.q_index;
 
       if (rc_param_.max_distinct_q_indices_per_frame > 1) {
-        std::vector<uint8_t> superblock_q_indices = SetupDeltaQ(
+        std::vector<uint8_t> superblock_q_indices;
+        superblock_q_indices = SetupDeltaQ(
             frame_dep_stats, rc_param_.frame_width, rc_param_.frame_height,
-            param.q_index, frame_importance);
+            param.q_index, frame_importance,
+            rc_param_.tpl_pass_count == TplPassCount::kTwoTplPasses);
         std::unordered_map<int, int> qindex_centroids = internal::KMeans(
             superblock_q_indices, rc_param_.max_distinct_q_indices_per_frame);
         for (size_t i = 0; i < superblock_q_indices.size(); ++i) {
@@ -1857,10 +2073,8 @@ StatusOr<GopEncodeInfo> AV1RateControlQMode::GetGopEncodeInfo(
     }
   }
 
-  // TODO(b/260859962): Currently firstpass stats are used as an alternative,
-  // but we could also combine it with tpl results in the future for more
-  // stable qp determination.
-  return GetGopEncodeInfoWithTpl(gop_struct, tpl_gop_stats, lookahead_stats,
+  return GetGopEncodeInfoWithTpl(gop_struct, firstpass_info, tpl_gop_stats,
+                                 lookahead_stats,
                                  ref_frame_table_snapshot_init);
 }
 
