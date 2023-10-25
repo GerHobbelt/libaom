@@ -23,6 +23,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "av1/encoder/rd.h"
 #include "av1/qmode_rc/ducky_encode.h"
 #include "av1/qmode_rc/reference_manager.h"
 #include "test/mock_ratectrl_qmode.h"
@@ -436,8 +437,26 @@ TEST_F(RateControlQModeTest, TplBlockStatsToDepStats) {
   const int unit_count = 2;
   TplBlockStats block_stats =
       CreateToyTplBlockStats(8, 4, 0, 0, intra_cost, inter_cost);
-  TplUnitDepStats unit_stats = TplBlockStatsToDepStats(block_stats, unit_count);
+  TplUnitDepStats unit_stats = TplBlockStatsToDepStats(
+      block_stats, unit_count, /*rate_dist_present=*/false);
   double expected_intra_cost = intra_cost * 1.0 / unit_count;
+  EXPECT_NEAR(unit_stats.intra_cost, expected_intra_cost, kErrorEpsilon);
+  // When inter_cost >= intra_cost in block_stats, in unit_stats,
+  // the inter_cost will be modified so that it's upper-bounded by intra_cost.
+  EXPECT_LE(unit_stats.inter_cost, unit_stats.intra_cost);
+}
+
+TEST_F(RateControlQModeTest, TplBlockStatsToDepStatsUsingPredErr) {
+  const int intra_cost = 100;
+  const int inter_cost = 120;
+  const int unit_count = 2;
+  TplBlockStats block_stats =
+      CreateToyTplBlockStats(8, 4, 0, 0, intra_cost, inter_cost);
+  block_stats.intra_pred_err = 40;
+  block_stats.inter_pred_err = 50;
+  TplUnitDepStats unit_stats = TplBlockStatsToDepStats(
+      block_stats, unit_count, /*rate_dist_present=*/true);
+  double expected_intra_cost = block_stats.intra_pred_err * 1.0 / unit_count;
   EXPECT_NEAR(unit_stats.intra_cost, expected_intra_cost, kErrorEpsilon);
   // When inter_cost >= intra_cost in block_stats, in unit_stats,
   // the inter_cost will be modified so that it's upper-bounded by intra_cost.
@@ -1062,8 +1081,13 @@ TEST_F(RateControlQModeTest, TestGetGopEncodeInfo) {
         rc.GetGopEncodeInfo(gop_list[gop_idx], tpl_gop_list[tpl_gop_idx], {},
                             firstpass_info, ref_frame_table);
     ASSERT_THAT(gop_encode_info.status(), IsOkStatus());
+
+    const int base_offset = av1_get_deltaq_offset(
+        AOM_BITS_8, rc_param_.base_q_index, gop_list[gop_idx].base_q_ratio);
+    const int base_q_index = rc_param_.base_q_index + base_offset;
+
     for (auto &frame_param : gop_encode_info->param_list) {
-      EXPECT_LE(frame_param.q_index, rc_param_.base_q_index);
+      EXPECT_LE(frame_param.q_index, base_q_index);
     }
     ref_frame_table = gop_encode_info->final_snapshot;
     for (auto &gop_frame : ref_frame_table) {

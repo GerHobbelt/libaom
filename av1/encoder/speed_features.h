@@ -646,6 +646,18 @@ typedef struct PARTITION_SPEED_FEATURES {
   // 2 : prune all block size based on qindex
   int prune_rectangular_split_based_on_qidx;
 
+  // Prune rectangular partitions based on 4x4 sub-block variance
+  // false : no pruning
+  // true : prune rectangular partitions based on 4x4 sub-block variance
+  // deviation
+  //
+  // For allintra encode, this speed feature reduces instruction count by 6.4%
+  // for speed=6 with coding performance change less than 0.24%. For AVIF image
+  // encode, this speed feature reduces encode time by 8.14% for speed 6 on a
+  // typical image dataset with coding performance change less than 0.16%. This
+  // speed feature is not applicable to speed >= 7.
+  bool prune_rect_part_using_4x4_var_deviation;
+
   // Terminate partition search for child partition,
   // when NONE and SPLIT partition rd_costs are INT64_MAX.
   int early_term_after_none_split;
@@ -1396,6 +1408,7 @@ typedef struct REAL_TIME_SPEED_FEATURES {
   // 0 - Only use zero MV
   // 1 - perform coarse ME
   // 2 - perform coarse ME, and also use neighbours' MVs
+  // 3 - use neighbours' MVs without performing coarse ME
   int estimate_motion_for_var_based_partition;
 
   // For nonrd_use_partition: mode of extra check of leaf partition

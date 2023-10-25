@@ -309,6 +309,11 @@ static void set_allintra_speed_feature_framesize_dependent(
   if (speed >= 9) {
     // TODO(kyslov): add more speed features to control speed/quality
     if (!is_4k_or_larger) {
+      // In av1_select_sb_size(), superblock size is set to 64x64 only for
+      // resolutions less than 4k in speed>=9, to improve the multithread
+      // performance. If cost update levels are set to INTERNAL_COST_UPD_OFF
+      // for resolutions >= 4k, the SB size setting can be modified for these
+      // resolutions as well.
       sf->inter_sf.coeff_cost_upd_level = INTERNAL_COST_UPD_OFF;
       sf->inter_sf.mode_cost_upd_level = INTERNAL_COST_UPD_OFF;
     }
@@ -497,6 +502,7 @@ static void set_allintra_speed_features_framesize_independent(
 
     sf->part_sf.prune_rectangular_split_based_on_qidx =
         allow_screen_content_tools ? 0 : 2;
+    sf->part_sf.prune_rect_part_using_4x4_var_deviation = true;
     sf->part_sf.prune_sub_8x8_partition_level =
         allow_screen_content_tools ? 0 : 1;
     sf->part_sf.prune_part4_search = 3;
@@ -1300,6 +1306,10 @@ static void set_rt_speed_feature_framesize_dependent(const AV1_COMP *const cpi,
       sf->rt_sf.use_adaptive_subpel_search = false;
     }
     if (speed >= 10) {
+      // TODO(yunqingwang@google.com): To be conservative, disable
+      // sf->rt_sf.estimate_motion_for_var_based_partition = 3 for speed 10/qvga
+      // for now. May enable it in the future.
+      sf->rt_sf.estimate_motion_for_var_based_partition = 0;
       sf->rt_sf.skip_intra_pred = 2;
       sf->rt_sf.hybrid_intra_pickmode = 3;
       sf->rt_sf.reduce_mv_pel_precision_lowcomplex = 1;
@@ -1438,6 +1448,7 @@ static void set_rt_speed_feature_framesize_dependent(const AV1_COMP *const cpi,
     // estimate_motion_for_var_based_partition == 2 helps here.
     if (sf->rt_sf.estimate_motion_for_var_based_partition == 2)
       sf->rt_sf.estimate_motion_for_var_based_partition = 1;
+    if (speed >= 9) sf->rt_sf.estimate_motion_for_var_based_partition = 0;
   }
   // Screen settings.
   if (cpi->oxcf.tune_cfg.content == AOM_CONTENT_SCREEN) {
@@ -1501,6 +1512,7 @@ static void set_rt_speed_feature_framesize_dependent(const AV1_COMP *const cpi,
     // for screen contents.
     if (sf->rt_sf.estimate_motion_for_var_based_partition == 2)
       sf->rt_sf.estimate_motion_for_var_based_partition = 1;
+    if (speed >= 9) sf->rt_sf.estimate_motion_for_var_based_partition = 0;
   }
 }
 
@@ -1772,7 +1784,7 @@ static void set_rt_speed_features_framesize_independent(AV1_COMP *cpi,
   }
   if (speed >= 9) {
     sf->rt_sf.sse_early_term_inter_search = EARLY_TERM_IDX_3;
-    sf->rt_sf.estimate_motion_for_var_based_partition = 0;
+    sf->rt_sf.estimate_motion_for_var_based_partition = 3;
     sf->rt_sf.prefer_large_partition_blocks = 3;
     sf->rt_sf.skip_intra_pred = 2;
     sf->rt_sf.var_part_split_threshold_shift = 9;
@@ -1867,6 +1879,7 @@ static AOM_INLINE void init_part_sf(PARTITION_SPEED_FEATURES *part_sf) {
   part_sf->rect_partition_eval_thresh = BLOCK_128X128;
   part_sf->prune_ext_part_using_split_info = 0;
   part_sf->prune_rectangular_split_based_on_qidx = 0;
+  part_sf->prune_rect_part_using_4x4_var_deviation = false;
   part_sf->early_term_after_none_split = 0;
   part_sf->ml_predict_breakout_level = 0;
   part_sf->prune_sub_8x8_partition_level = 0;
