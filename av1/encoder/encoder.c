@@ -648,11 +648,12 @@ static void init_config(struct AV1_COMP *cpi, const AV1EncoderConfig *oxcf) {
   resize_pending_params->width = 0;
   resize_pending_params->height = 0;
 
+  // Setup identity scale factor
+  av1_setup_scale_factors_for_frame(&cm->sf_identity, 1, 1, 1, 1);
+
   init_buffer_indices(&cpi->force_intpel_info, cm->remapped_ref_idx);
 
   av1_noise_estimate_init(&cpi->noise_estimate, cm->width, cm->height);
-
-  cpi->image_pyramid_levels = oxcf->tool_cfg.enable_global_motion ? 1 : 0;
 }
 
 void av1_change_config_seq(struct AV1_PRIMARY *ppi,
@@ -906,6 +907,18 @@ void av1_change_config(struct AV1_COMP *cpi, const AV1EncoderConfig *oxcf,
   if (lap_lag_in_frames != -1) {
     cpi->oxcf.gf_cfg.lag_in_frames = lap_lag_in_frames;
   }
+
+#if CONFIG_REALTIME_ONLY
+  assert(!oxcf->tool_cfg.enable_global_motion);
+  cpi->image_pyramid_levels = 0;
+#else
+  if (oxcf->tool_cfg.enable_global_motion) {
+    cpi->image_pyramid_levels =
+        global_motion_pyr_levels[oxcf->global_motion_method];
+  } else {
+    cpi->image_pyramid_levels = 0;
+  }
+#endif  // CONFIG_REALTIME_ONLY
 }
 
 static INLINE void init_frame_info(FRAME_INFO *frame_info,
@@ -4718,6 +4731,9 @@ int av1_get_compressed_data(AV1_COMP *cpi, AV1_COMP_DATA *const cpi_data) {
     }
   }
 #endif
+
+  // Reset the flag to 0 afer encoding.
+  cpi->rc.use_external_qp_one_pass = 0;
 
   if (result == -1) {
     cm->error->setjmp = 0;

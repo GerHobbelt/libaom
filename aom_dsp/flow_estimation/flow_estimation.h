@@ -39,9 +39,11 @@ enum {
 static const int trans_model_params[TRANS_TYPES] = { 0, 2, 4, 6 };
 
 typedef enum {
-  GLOBAL_MOTION_FEATURE_BASED,
-  GLOBAL_MOTION_DISFLOW_BASED,
-} GlobalMotionEstimationType;
+  GLOBAL_MOTION_METHOD_FEATURE_MATCH,
+  GLOBAL_MOTION_METHOD_DISFLOW,
+  GLOBAL_MOTION_METHOD_LAST = GLOBAL_MOTION_METHOD_DISFLOW,
+  GLOBAL_MOTION_METHODS
+} GlobalMotionMethod;
 
 typedef struct {
   double params[MAX_PARAMDIM - 1];
@@ -49,11 +51,31 @@ typedef struct {
   int num_inliers;
 } MotionModel;
 
+// Data structure to store a single correspondence point during global
+// motion search.
+//
+// A correspondence (x, y) -> (rx, ry) means that point (x, y) in the
+// source frame corresponds to point (rx, ry) in the ref frame.
+typedef struct {
+  double x, y;
+  double rx, ry;
+} Correspondence;
+
+// For each global motion method, how many pyramid levels should we allocate?
+// Note that this is a maximum, and fewer levels will be allocated if the frame
+// is not large enough to need all of the specified levels
+extern const int global_motion_pyr_levels[GLOBAL_MOTION_METHODS];
+
+// Compute a global motion model between the given source and ref frames.
+//
+// As is standard for video codecs, the resulting model maps from (x, y)
+// coordinates in `src` to the corresponding points in `ref`, regardless
+// of the temporal order of the two frames.
 int aom_compute_global_motion(TransformationType type, YV12_BUFFER_CONFIG *src,
                               YV12_BUFFER_CONFIG *ref, int bit_depth,
-                              GlobalMotionEstimationType gm_estimation_type,
-                              int *num_inliers_by_motion,
-                              MotionModel *params_by_motion, int num_motions);
+                              GlobalMotionMethod gm_method,
+                              MotionModel *motion_models,
+                              int num_motion_models);
 
 #ifdef __cplusplus
 }

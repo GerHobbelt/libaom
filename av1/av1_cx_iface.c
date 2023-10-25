@@ -20,6 +20,8 @@
 #include "aom/aom_encoder.h"
 #include "aom/internal/aom_codec_internal.h"
 
+#include "aom_dsp/flow_estimation/flow_estimation.h"
+
 #include "av1/av1_iface_common.h"
 #include "av1/encoder/bitstream.h"
 #include "av1/encoder/encoder.h"
@@ -194,6 +196,7 @@ struct av1_extracfg {
   int strict_level_conformance;
   int kf_max_pyr_height;
   int sb_qp_sweep;
+  GlobalMotionMethod global_motion_method;
 };
 
 #if CONFIG_REALTIME_ONLY
@@ -338,25 +341,26 @@ static const struct av1_extracfg default_extra_cfg = {
       SEQ_LEVEL_MAX, SEQ_LEVEL_MAX, SEQ_LEVEL_MAX, SEQ_LEVEL_MAX, SEQ_LEVEL_MAX,
       SEQ_LEVEL_MAX, SEQ_LEVEL_MAX, SEQ_LEVEL_MAX, SEQ_LEVEL_MAX, SEQ_LEVEL_MAX,
       SEQ_LEVEL_MAX, SEQ_LEVEL_MAX,
-  },               // target_seq_level_idx
-  0,               // tier_mask
-  0,               // min_cr
-  COST_UPD_OFF,    // coeff_cost_upd_freq
-  COST_UPD_OFF,    // mode_cost_upd_freq
-  COST_UPD_OFF,    // mv_cost_upd_freq
-  COST_UPD_OFF,    // dv_cost_upd_freq
-  0,               // ext_tile_debug
-  0,               // sb_multipass_unit_test
-  -1,              // passes
-  -1,              // fwd_kf_dist
-  LOOPFILTER_ALL,  // loopfilter_control
-  0,               // skip_postproc_filtering
-  NULL,            // two_pass_output
-  NULL,            // second_pass_log
-  0,               // auto_intra_tools_off
-  0,               // strict_level_conformance
-  -1,              // kf_max_pyr_height
-  0,               // sb_qp_sweep
+  },                                   // target_seq_level_idx
+  0,                                   // tier_mask
+  0,                                   // min_cr
+  COST_UPD_OFF,                        // coeff_cost_upd_freq
+  COST_UPD_OFF,                        // mode_cost_upd_freq
+  COST_UPD_OFF,                        // mv_cost_upd_freq
+  COST_UPD_OFF,                        // dv_cost_upd_freq
+  0,                                   // ext_tile_debug
+  0,                                   // sb_multipass_unit_test
+  -1,                                  // passes
+  -1,                                  // fwd_kf_dist
+  LOOPFILTER_ALL,                      // loopfilter_control
+  0,                                   // skip_postproc_filtering
+  NULL,                                // two_pass_output
+  NULL,                                // second_pass_log
+  0,                                   // auto_intra_tools_off
+  0,                                   // strict_level_conformance
+  -1,                                  // kf_max_pyr_height
+  0,                                   // sb_qp_sweep
+  GLOBAL_MOTION_METHOD_FEATURE_MATCH,  // global_motion_method
 };
 #else
 static const struct av1_extracfg default_extra_cfg = {
@@ -487,25 +491,26 @@ static const struct av1_extracfg default_extra_cfg = {
       SEQ_LEVEL_MAX, SEQ_LEVEL_MAX, SEQ_LEVEL_MAX, SEQ_LEVEL_MAX, SEQ_LEVEL_MAX,
       SEQ_LEVEL_MAX, SEQ_LEVEL_MAX, SEQ_LEVEL_MAX, SEQ_LEVEL_MAX, SEQ_LEVEL_MAX,
       SEQ_LEVEL_MAX, SEQ_LEVEL_MAX,
-  },               // target_seq_level_idx
-  0,               // tier_mask
-  0,               // min_cr
-  COST_UPD_SB,     // coeff_cost_upd_freq
-  COST_UPD_SB,     // mode_cost_upd_freq
-  COST_UPD_SB,     // mv_cost_upd_freq
-  COST_UPD_SB,     // dv_cost_upd_freq
-  0,               // ext_tile_debug
-  0,               // sb_multipass_unit_test
-  -1,              // passes
-  -1,              // fwd_kf_dist
-  LOOPFILTER_ALL,  // loopfilter_control
-  0,               // skip_postproc_filtering
-  NULL,            // two_pass_output
-  NULL,            // second_pass_log
-  0,               // auto_intra_tools_off
-  0,               // strict_level_conformance
-  -1,              // kf_max_pyr_height
-  0,               // sb_qp_sweep
+  },                                   // target_seq_level_idx
+  0,                                   // tier_mask
+  0,                                   // min_cr
+  COST_UPD_SB,                         // coeff_cost_upd_freq
+  COST_UPD_SB,                         // mode_cost_upd_freq
+  COST_UPD_SB,                         // mv_cost_upd_freq
+  COST_UPD_SB,                         // dv_cost_upd_freq
+  0,                                   // ext_tile_debug
+  0,                                   // sb_multipass_unit_test
+  -1,                                  // passes
+  -1,                                  // fwd_kf_dist
+  LOOPFILTER_ALL,                      // loopfilter_control
+  0,                                   // skip_postproc_filtering
+  NULL,                                // two_pass_output
+  NULL,                                // second_pass_log
+  0,                                   // auto_intra_tools_off
+  0,                                   // strict_level_conformance
+  -1,                                  // kf_max_pyr_height
+  0,                                   // sb_qp_sweep
+  GLOBAL_MOTION_METHOD_FEATURE_MATCH,  // global_motion_method
 };
 #endif
 
@@ -762,6 +767,10 @@ static aom_codec_err_t validate_config(aom_codec_alg_priv_t *ctx,
     ERROR("Current pass is larger than total number of passes.");
   }
 
+  if (cfg->g_profile == (unsigned int)PROFILE_1 && cfg->monochrome) {
+    ERROR("Monochrome is not supported in profile 1");
+  }
+
   if (cfg->g_profile <= (unsigned int)PROFILE_1 &&
       cfg->g_bit_depth > AOM_BITS_10) {
     ERROR("Codec bit-depth 12 not supported in profile < 2");
@@ -862,6 +871,8 @@ static aom_codec_err_t validate_config(aom_codec_alg_priv_t *ctx,
   RANGE_CHECK_BOOL(extra_cfg, auto_intra_tools_off);
   RANGE_CHECK_BOOL(extra_cfg, strict_level_conformance);
   RANGE_CHECK_BOOL(extra_cfg, sb_qp_sweep);
+  RANGE_CHECK(extra_cfg, global_motion_method,
+              GLOBAL_MOTION_METHOD_FEATURE_MATCH, GLOBAL_MOTION_METHOD_LAST);
 
   RANGE_CHECK(extra_cfg, kf_max_pyr_height, -1, 5);
   if (extra_cfg->kf_max_pyr_height != -1 &&
@@ -1459,6 +1470,8 @@ static aom_codec_err_t set_encoder_config(AV1EncoderConfig *oxcf,
   oxcf->kf_max_pyr_height = extra_cfg->kf_max_pyr_height;
 
   oxcf->sb_qp_sweep = extra_cfg->sb_qp_sweep;
+
+  oxcf->global_motion_method = extra_cfg->global_motion_method;
 
   return AOM_CODEC_OK;
 }
@@ -2141,6 +2154,9 @@ static aom_codec_err_t ctrl_set_aq_mode(aom_codec_alg_priv_t *ctx,
                                         va_list args) {
   struct av1_extracfg extra_cfg = ctx->extra_cfg;
   extra_cfg.aq_mode = CAST(AV1E_SET_AQ_MODE, args);
+
+  // Skip AQ mode if using fixed QP for current frame.
+  if (ctx->ppi->cpi->rc.use_external_qp_one_pass) extra_cfg.aq_mode = 0;
   return update_extra_cfg(ctx, &extra_cfg);
 }
 
@@ -2484,6 +2500,21 @@ static aom_codec_err_t ctrl_set_rtc_external_rc(aom_codec_alg_priv_t *ctx,
   ctx->ppi->cpi->rc.rtc_external_ratectrl =
       CAST(AV1E_SET_RTC_EXTERNAL_RC, args);
   return AOM_CODEC_OK;
+}
+
+static aom_codec_err_t ctrl_set_quantizer_one_pass(aom_codec_alg_priv_t *ctx,
+                                                   va_list args) {
+  const int qp = CAST(AV1E_SET_QUANTIZER_ONE_PASS, args);
+
+  if (qp < 0 || qp > 63) return AOM_CODEC_INVALID_PARAM;
+
+  aom_codec_enc_cfg_t *cfg = &ctx->cfg;
+  struct av1_extracfg extra_cfg = ctx->extra_cfg;
+  cfg->rc_min_quantizer = cfg->rc_max_quantizer = qp;
+  extra_cfg.aq_mode = 0;
+  ctx->ppi->cpi->rc.use_external_qp_one_pass = 1;
+
+  return update_extra_cfg(ctx, &extra_cfg);
 }
 
 #if !CONFIG_REALTIME_ONLY
@@ -4023,6 +4054,9 @@ static aom_codec_err_t encoder_set_option(aom_codec_alg_priv_t *ctx,
                               err_string)) {
     ctx->cfg.tile_height_count = arg_parse_list_helper(
         &arg, ctx->cfg.tile_heights, MAX_TILE_HEIGHTS, err_string);
+  } else if (arg_match_helper(&arg, &g_av1_codec_arg_defs.global_motion_method,
+                              argv, err_string)) {
+    extra_cfg.global_motion_method = arg_parse_enum_helper(&arg, err_string);
   } else {
     match = 0;
     snprintf(err_string, ARG_ERR_MSG_MAX_LEN, "Cannot find aom option %s",
@@ -4212,6 +4246,7 @@ static aom_codec_ctrl_fn_map_t encoder_ctrl_maps[] = {
   { AV1E_SET_SKIP_POSTPROC_FILTERING, ctrl_set_skip_postproc_filtering },
   { AV1E_SET_AUTO_INTRA_TOOLS_OFF, ctrl_set_auto_intra_tools_off },
   { AV1E_SET_RTC_EXTERNAL_RC, ctrl_set_rtc_external_rc },
+  { AV1E_SET_QUANTIZER_ONE_PASS, ctrl_set_quantizer_one_pass },
 
   // Getters
   { AOME_GET_LAST_QUANTIZER, ctrl_get_quantizer },

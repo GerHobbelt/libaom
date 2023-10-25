@@ -134,7 +134,8 @@ enum {
   SUBPEL_TREE = 0,
   SUBPEL_TREE_PRUNED = 1,       // Prunes 1/2-pel searches
   SUBPEL_TREE_PRUNED_MORE = 2,  // Prunes 1/2-pel searches more aggressively
-} UENUM1BYTE(SUBPEL_SEARCH_METHODS);
+  SUBPEL_SEARCH_METHODS
+} UENUM1BYTE(SUBPEL_SEARCH_METHOD);
 
 enum {
   // Try the full image with different values.
@@ -442,6 +443,13 @@ typedef struct HIGH_LEVEL_SPEED_FEATURES {
    * 1: estimate bits more accurately based on the frame complexity.
    */
   int accurate_bit_estimate;
+
+  /*!
+   * Decide the approach for weight calculation during temporal filtering.
+   * 0: Calculate weight using exp()
+   * 1: Calculate weight using a lookup table that approximates exp().
+   */
+  int weight_calc_level_in_tf;
 } HIGH_LEVEL_SPEED_FEATURES;
 
 /*!
@@ -755,7 +763,7 @@ typedef struct MV_SPEED_FEATURES {
   // logarithmic search that keeps stepping at 1/2 pixel units until
   // you stop getting a gain, and then goes on to 1/4 and repeats
   // the same process. Along the way it skips many diagonals.
-  SUBPEL_SEARCH_METHODS subpel_search_method;
+  SUBPEL_SEARCH_METHOD subpel_search_method;
 
   // Maximum number of steps in logarithmic subpel search before giving up.
   int subpel_iters_per_step;

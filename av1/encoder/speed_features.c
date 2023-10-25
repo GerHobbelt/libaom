@@ -1183,6 +1183,9 @@ static void set_good_speed_features_framesize_independent(
   }
 
   if (speed >= 5) {
+    // TODO(Ranjit): Enable the optimization for highbd encoding mode
+    sf->hl_sf.weight_calc_level_in_tf = use_hbd ? 0 : 1;
+
     sf->fp_sf.reduce_mv_step_param = 4;
 
     sf->part_sf.simple_motion_search_prune_agg =
@@ -1644,7 +1647,7 @@ static void set_rt_speed_features_framesize_independent(AV1_COMP *cpi,
   sf->winner_mode_sf.winner_mode_ifs = 1;
 
   sf->rt_sf.check_intra_pred_nonrd = 1;
-  sf->rt_sf.estimate_motion_for_var_based_partition = 1;
+  sf->rt_sf.estimate_motion_for_var_based_partition = 2;
   sf->rt_sf.hybrid_intra_pickmode = 1;
   sf->rt_sf.use_comp_ref_nonrd = 0;
   sf->rt_sf.ref_frame_comp_nonrd[0] = 0;
@@ -1769,7 +1772,6 @@ static void set_rt_speed_features_framesize_independent(AV1_COMP *cpi,
 
   if (speed >= 8) {
     sf->rt_sf.sse_early_term_inter_search = EARLY_TERM_IDX_2;
-    sf->rt_sf.estimate_motion_for_var_based_partition = 2;
     sf->intra_sf.intra_pruning_with_hog = 1;
     sf->rt_sf.short_circuit_low_temp_var = 1;
     sf->rt_sf.use_nonrd_altref_frame = 0;
@@ -1817,6 +1819,7 @@ static AOM_INLINE void init_hl_sf(HIGH_LEVEL_SPEED_FEATURES *hl_sf) {
   hl_sf->second_alt_ref_filtering = 1;
   hl_sf->num_frames_used_in_tf = INT_MAX;
   hl_sf->accurate_bit_estimate = 0;
+  hl_sf->weight_calc_level_in_tf = 0;
 }
 
 static AOM_INLINE void init_fp_sf(FIRST_PASS_SPEED_FEATURES *fp_sf) {
@@ -2145,23 +2148,22 @@ static AOM_INLINE void init_rt_sf(REAL_TIME_SPEED_FEATURES *rt_sf) {
   rt_sf->check_globalmv_on_single_ref = true;
 }
 
+static fractional_mv_step_fp
+    *const fractional_mv_search[SUBPEL_SEARCH_METHODS] = {
+      av1_find_best_sub_pixel_tree,             // SUBPEL_TREE = 0
+      av1_find_best_sub_pixel_tree_pruned,      // SUBPEL_TREE_PRUNED = 1
+      av1_find_best_sub_pixel_tree_pruned_more  // SUBPEL_TREE_PRUNED_MORE = 2
+    };
+
 // Populate appropriate sub-pel search method based on speed feature and user
 // specified settings
 static void set_subpel_search_method(
     MotionVectorSearchParams *mv_search_params,
     unsigned int motion_vector_unit_test,
-    SUBPEL_SEARCH_METHODS subpel_search_method) {
-  if (subpel_search_method == SUBPEL_TREE) {
-    mv_search_params->find_fractional_mv_step = av1_find_best_sub_pixel_tree;
-  } else if (subpel_search_method == SUBPEL_TREE_PRUNED) {
-    mv_search_params->find_fractional_mv_step =
-        av1_find_best_sub_pixel_tree_pruned;
-  } else if (subpel_search_method == SUBPEL_TREE_PRUNED_MORE) {
-    mv_search_params->find_fractional_mv_step =
-        av1_find_best_sub_pixel_tree_pruned_more;
-  } else {
-    assert(0);
-  }
+    SUBPEL_SEARCH_METHOD subpel_search_method) {
+  assert(subpel_search_method <= SUBPEL_TREE_PRUNED_MORE);
+  mv_search_params->find_fractional_mv_step =
+      fractional_mv_search[subpel_search_method];
 
   // This is only used in motion vector unit test.
   if (motion_vector_unit_test == 1)

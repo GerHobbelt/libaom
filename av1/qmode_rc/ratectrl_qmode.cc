@@ -1187,7 +1187,7 @@ double GetPropagationFraction(const TplUnitDepStats &unit_dep_stats) {
          ModifyDivisor(unit_dep_stats.intra_cost);
 }
 
-void TplFrameDepStatsBackTrace(int coding_idx,
+void TplFrameDepStatsBackTrace(int coding_idx, GopFrameType update_type,
                                const RefFrameTable &ref_frame_table,
                                TplGopDepStats *tpl_gop_dep_stats) {
   assert(!tpl_gop_dep_stats->frame_dep_stats_list.empty());
@@ -1196,6 +1196,10 @@ void TplFrameDepStatsBackTrace(int coding_idx,
 
   if (frame_dep_stats->unit_stats.empty()) return;
   if (frame_dep_stats->alt_unit_stats.empty()) return;
+
+  const bool ignore_inter = update_type == GopFrameType::kRegularKey ||
+                            update_type == GopFrameType::kRegularArf ||
+                            update_type == GopFrameType::kRegularGolden;
 
   const int unit_size = frame_dep_stats->unit_size;
   const int frame_unit_rows =
@@ -1250,14 +1254,14 @@ void TplFrameDepStatsBackTrace(int coding_idx,
                   ref_frame_dep_stats
                       .alt_unit_stats[ref_unit_row][ref_unit_col];
               alt_ref_unit_stats.propagation_cost +=
-                  (alt_unit_dep_stats.inter_cost +
+                  ((ignore_inter ? 0.0 : alt_unit_dep_stats.inter_cost) +
                    alt_unit_dep_stats.propagation_cost) *
                   propagation_ratio;
 
               TplUnitDepStats &ref_unit_stats =
                   ref_frame_dep_stats.unit_stats[ref_unit_row][ref_unit_col];
               ref_unit_stats.propagation_cost +=
-                  (unit_dep_stats.inter_cost +
+                  ((ignore_inter ? 0.0 : unit_dep_stats.inter_cost) +
                    unit_dep_stats.propagation_cost) *
                   propagation_ratio;
             }
@@ -1319,15 +1323,26 @@ void TplFrameDepStatsPropagate(int coding_idx,
                   ref_unit_col * unit_size, unit_size);
               const double overlap_ratio =
                   overlap_area * 1.0 / (unit_size * unit_size);
+              const double propagation_fraction_power = 0.3;
+              // We apply propagation_fraction with power of 0.3 to improve
+              // propagation rate. The power coefficient is tuned from empirical
+              // practice due to the fact that the inter/intra cost is RD cost
+              // not prediction error which is used in the original design. This
+              // action will increase the propagation_fraction when the
+              // difference between intra_cost and inter_cost are reasonably big
+              // but not enough for propagation.
+              // TODO(angiebird): Check this part again when we use prediction
+              // error for inter/intra cost.
               const double propagation_fraction =
-                  GetPropagationFraction(unit_dep_stats);
+                  std::pow(GetPropagationFraction(unit_dep_stats),
+                           propagation_fraction_power);
               const double propagation_ratio =
-                  1.0 / ref_frame_count * overlap_ratio * propagation_fraction;
+                  1.0 / ref_frame_count * overlap_ratio;
               TplUnitDepStats &ref_unit_stats =
                   ref_frame_dep_stats.unit_stats[ref_unit_row][ref_unit_col];
               ref_unit_stats.propagation_cost +=
-                  (unit_dep_stats.intra_cost +
-                   unit_dep_stats.propagation_cost) *
+                  (unit_dep_stats.intra_cost - unit_dep_stats.inter_cost +
+                   unit_dep_stats.propagation_cost * propagation_fraction) *
                   propagation_ratio;
             }
           }
@@ -1390,7 +1405,7 @@ std::vector<RefFrameTable> AV1RateControlQMode::GetRefFrameTableList(
 }
 
 StatusOr<TplGopDepStats> ComputeTplGopDepStats(
-    const TplGopStats &tpl_gop_stats,
+    const GopStruct &gop_struct, const TplGopStats &tpl_gop_stats,
     const std::vector<LookaheadStats> &lookahead_stats,
     const std::vector<RefFrameTable> &ref_frame_table_list) {
   std::vector<const TplFrameStats *> tpl_frame_stats_list_with_lookahead;
@@ -1435,11 +1450,67 @@ StatusOr<TplGopDepStats> ComputeTplGopDepStats(
                                 &tpl_gop_dep_stats);
     } else {
       // Two pass TPL runs
-      TplFrameDepStatsBackTrace(coding_idx, ref_frame_table,
+
+      int first_gop_size = static_cast<int>(gop_struct.gop_frame_list.size());
+      GopFrameType update_type;
+      if (coding_idx >= first_gop_size) {
+        update_type = lookahead_stats[0]
+                          .gop_struct[0]
+                          .gop_frame_list[coding_idx - first_gop_size]
+                          .update_type;
+      } else {
+        update_type = gop_struct.gop_frame_list[coding_idx].update_type;
+      }
+
+      TplFrameDepStatsBackTrace(coding_idx, update_type, ref_frame_table,
                                 &tpl_gop_dep_stats);
     }
   }
   return tpl_gop_dep_stats;
+}
+
+static double GetFrameImportanceTwoPassTpl(
+    const TplFrameDepStats &frame_dep_stats, int frame_width,
+    int frame_height) {
+  const int sb_size = 64;
+  const int num_unit_per_sb = sb_size / frame_dep_stats.unit_size;
+  const int sb_rows = (frame_height + sb_size - 1) / sb_size;
+  const int sb_cols = (frame_width + sb_size - 1) / sb_size;
+  const int unit_rows = (frame_height + frame_dep_stats.unit_size - 1) /
+                        frame_dep_stats.unit_size;
+  const int unit_cols =
+      (frame_width + frame_dep_stats.unit_size - 1) / frame_dep_stats.unit_size;
+  std::vector<uint8_t> superblock_q_indices;
+
+  // Cumulate frame level stats
+  double cum_inter_cost = 0;
+  double cum_rdcost_diff = 0;
+  for (int sb_row = 0; sb_row < sb_rows; ++sb_row) {
+    for (int sb_col = 0; sb_col < sb_cols; ++sb_col) {
+      const int unit_row_start = sb_row * num_unit_per_sb;
+      const int unit_row_end =
+          std::min((sb_row + 1) * num_unit_per_sb, unit_rows);
+      const int unit_col_start = sb_col * num_unit_per_sb;
+      const int unit_col_end =
+          std::min((sb_col + 1) * num_unit_per_sb, unit_cols);
+      // A simplified version of av1_get_q_for_deltaq_objective()
+      for (int unit_row = unit_row_start; unit_row < unit_row_end; ++unit_row) {
+        for (int unit_col = unit_col_start; unit_col < unit_col_end;
+             ++unit_col) {
+          const TplUnitDepStats &unit_dep_stats =
+              frame_dep_stats.unit_stats[unit_row][unit_col];
+          const TplUnitDepStats &alt_unit_dep_stats =
+              frame_dep_stats.alt_unit_stats[unit_row][unit_col];
+          cum_inter_cost += unit_dep_stats.inter_cost;
+          cum_rdcost_diff += std::max(unit_dep_stats.propagation_cost -
+                                          alt_unit_dep_stats.propagation_cost,
+                                      0.0);
+        }
+      }
+    }
+  }
+  cum_inter_cost = std::max(cum_inter_cost, 1.0);
+  return (cum_rdcost_diff + cum_inter_cost) / cum_inter_cost;
 }
 
 static std::vector<uint8_t> SetupDeltaQ(const TplFrameDepStats &frame_dep_stats,
@@ -1459,39 +1530,6 @@ static std::vector<uint8_t> SetupDeltaQ(const TplFrameDepStats &frame_dep_stats,
       (frame_width + frame_dep_stats.unit_size - 1) / frame_dep_stats.unit_size;
   std::vector<uint8_t> superblock_q_indices;
 
-  if (use_twopass_data) {
-    // Cumulate frame level stats
-    double cum_inter_cost = 0;
-    double cum_rdcost_diff = 0;
-    for (int sb_row = 0; sb_row < sb_rows; ++sb_row) {
-      for (int sb_col = 0; sb_col < sb_cols; ++sb_col) {
-        const int unit_row_start = sb_row * num_unit_per_sb;
-        const int unit_row_end =
-            std::min((sb_row + 1) * num_unit_per_sb, unit_rows);
-        const int unit_col_start = sb_col * num_unit_per_sb;
-        const int unit_col_end =
-            std::min((sb_col + 1) * num_unit_per_sb, unit_cols);
-        // A simplified version of av1_get_q_for_deltaq_objective()
-        for (int unit_row = unit_row_start; unit_row < unit_row_end;
-             ++unit_row) {
-          for (int unit_col = unit_col_start; unit_col < unit_col_end;
-               ++unit_col) {
-            const TplUnitDepStats &unit_dep_stats =
-                frame_dep_stats.unit_stats[unit_row][unit_col];
-            const TplUnitDepStats &alt_unit_dep_stats =
-                frame_dep_stats.alt_unit_stats[unit_row][unit_col];
-            cum_inter_cost += unit_dep_stats.inter_cost;
-            cum_rdcost_diff += (unit_dep_stats.propagation_cost -
-                                alt_unit_dep_stats.propagation_cost);
-          }
-        }
-      }
-    }
-    frame_importance = cum_inter_cost > 0
-                           ? (cum_rdcost_diff + cum_inter_cost) / cum_inter_cost
-                           : -1.0;
-  }
-
   // Calculate delta_q offset for each superblock.
   for (int sb_row = 0; sb_row < sb_rows; ++sb_row) {
     for (int sb_col = 0; sb_col < sb_cols; ++sb_col) {
@@ -1509,26 +1547,28 @@ static std::vector<uint8_t> SetupDeltaQ(const TplFrameDepStats &frame_dep_stats,
              ++unit_col) {
           const TplUnitDepStats &unit_dep_stats =
               frame_dep_stats.unit_stats[unit_row][unit_col];
-          mc_dep_cost += unit_dep_stats.propagation_cost;
 
           if (use_twopass_data) {
-            intra_cost += unit_dep_stats.inter_cost;
             const TplUnitDepStats &alt_unit_dep_stats =
                 frame_dep_stats.alt_unit_stats[unit_row][unit_col];
-            mc_dep_cost -= alt_unit_dep_stats.propagation_cost;
+            mc_dep_cost += std::max(unit_dep_stats.propagation_cost -
+                                        alt_unit_dep_stats.propagation_cost,
+                                    0.0);
+            intra_cost += unit_dep_stats.inter_cost;
           } else {
+            mc_dep_cost += unit_dep_stats.propagation_cost;
             intra_cost += unit_dep_stats.intra_cost;
           }
         }
       }
+      intra_cost = std::max(intra_cost, 1.0);
 
       double beta = 1.0;
-      if (frame_importance > 0 && mc_dep_cost > 0 && intra_cost > 0) {
-        const double r0 = 1 / frame_importance;
-        const double rk = intra_cost / (mc_dep_cost + intra_cost);
-        beta = r0 / rk;
-        assert(beta > 0.0);
-      }
+      const double r0 = 1 / frame_importance;
+      const double rk = intra_cost / (mc_dep_cost + intra_cost);
+      beta = r0 / rk;
+      assert(beta > 0.0);
+
       int offset = av1_get_deltaq_offset(AOM_BITS_8, base_qindex, beta);
       offset = std::min(offset, delta_q_res * 9 - 1);
       offset = std::max(offset, -delta_q_res * 9 + 1);
@@ -1730,9 +1770,11 @@ StatusOr<GopEncodeInfo> AV1RateControlQMode::GetGopEncodeInfoWithNoStats(
       if (gop_frame.update_type == GopFrameType::kRegularGolden ||
           gop_frame.update_type == GopFrameType::kRegularKey ||
           gop_frame.update_type == GopFrameType::kRegularArf) {
-        if (rc_param_.tpl_pass_index) param.q_index = kSecondTplPassQp;
-        param.rdmult = av1_compute_rd_mult_based_on_qindex(
-            AOM_BITS_8, ARF_UPDATE, kSecondTplPassQp);
+        if (rc_param_.tpl_pass_index) {
+          param.q_index = kSecondTplPassQp;
+          param.rdmult = av1_compute_rd_mult_based_on_qindex(
+              AOM_BITS_8, ARF_UPDATE, kSecondTplPassQp);
+        }
       }
     }
     gop_encode_info.param_list.push_back(param);
@@ -1865,21 +1907,16 @@ double GetAccumulatedScore(const FirstpassInfo &firstpass_info, int this_index,
   return score;
 }
 
-int AdjustStaticQp(double avg_correlation, double score, int q_index) {
-  if (avg_correlation < 0.99) return q_index;
-  const double factor = q_index * score / 400 + 1.0;
-
-  return static_cast<int>(q_index / factor);
-}
-
 StatusOr<GopEncodeInfo> AV1RateControlQMode::GetGopEncodeInfoWithFp(
     const GopStruct &gop_struct, const FirstpassInfo &firstpass_info,
     const std::vector<LookaheadStats> &lookahead_stats,
     const RefFrameTable &ref_frame_table_snapshot_init) {
+  const int frame_count = static_cast<int>(gop_struct.gop_frame_list.size());
+  GopEncodeInfo gop_encode_info;
+
   const std::vector<RefFrameTable> ref_frame_table_list = GetRefFrameTableList(
       gop_struct, lookahead_stats, ref_frame_table_snapshot_init);
-  GopEncodeInfo gop_encode_info;
-  gop_encode_info.final_snapshot = ref_frame_table_list.back();
+  gop_encode_info.final_snapshot = ref_frame_table_list[frame_count];
 
   const int stats_size = static_cast<int>(firstpass_info.stats_list.size());
   const FirstpassInfo analyzed_fp_info =
@@ -1898,7 +1935,6 @@ StatusOr<GopEncodeInfo> AV1RateControlQMode::GetGopEncodeInfoWithFp(
   }
 
   GopFrame arf_frame = GopFrameInvalid();
-  const int frame_count = static_cast<int>(gop_struct.gop_frame_list.size());
 
   const int base_offset = av1_get_deltaq_offset(
       AOM_BITS_8, rc_param_.base_q_index, gop_struct.base_q_ratio);
@@ -1954,18 +1990,22 @@ StatusOr<GopEncodeInfo> AV1RateControlQMode::GetGopEncodeInfoWithTpl(
     const TplGopStats &tpl_gop_stats,
     const std::vector<LookaheadStats> &lookahead_stats,
     const RefFrameTable &ref_frame_table_snapshot_init) {
-  const std::vector<RefFrameTable> ref_frame_table_list = GetRefFrameTableList(
-      gop_struct, lookahead_stats, ref_frame_table_snapshot_init);
+  assert(tpl_gop_stats.frame_stats_list.size() ==
+         gop_struct.gop_frame_list.size());
+  const int frame_count =
+      static_cast<int>(tpl_gop_stats.frame_stats_list.size());
 
   GopEncodeInfo gop_encode_info;
-  gop_encode_info.final_snapshot = ref_frame_table_list.back();
+
+  const std::vector<RefFrameTable> ref_frame_table_list = GetRefFrameTableList(
+      gop_struct, lookahead_stats, ref_frame_table_snapshot_init);
+  gop_encode_info.final_snapshot = ref_frame_table_list[frame_count];
+
   StatusOr<TplGopDepStats> gop_dep_stats = ComputeTplGopDepStats(
-      tpl_gop_stats, lookahead_stats, ref_frame_table_list);
+      gop_struct, tpl_gop_stats, lookahead_stats, ref_frame_table_list);
   if (!gop_dep_stats.ok()) {
     return gop_dep_stats.status();
   }
-  const int frame_count =
-      static_cast<int>(tpl_gop_stats.frame_stats_list.size());
 
   const int stats_size = static_cast<int>(firstpass_info.stats_list.size());
 
@@ -1988,33 +2028,6 @@ StatusOr<GopEncodeInfo> AV1RateControlQMode::GetGopEncodeInfoWithTpl(
   const int active_worst_quality = base_q_index;
   int active_best_quality = base_q_index;
 
-  double base_rdcost = 1.0;  // baseline total rdcost
-  double hqr_rdcost = 0;     // high quality reference total rdcost
-  double arf_rdcost_high = 1.0;
-
-  bool kf_arf_seen = false;
-
-  for (int i = 0; i < frame_count; ++i) {
-    FrameEncodeParameters param;
-    const GopFrame &gop_frame = gop_struct.gop_frame_list[i];
-    const TplFrameDepStats &frame_dep_stats =
-        gop_dep_stats->frame_dep_stats_list[i];
-    if (gop_frame.update_type == GopFrameType::kRegularGolden ||
-        gop_frame.update_type == GopFrameType::kRegularKey ||
-        gop_frame.update_type == GopFrameType::kRegularArf) {
-      if (!kf_arf_seen) {
-        arf_rdcost_high += frame_dep_stats.rdcost;
-      }
-      kf_arf_seen = 1;
-    } else {
-      base_rdcost += frame_dep_stats.rdcost;
-      hqr_rdcost += frame_dep_stats.alt_rdcost;
-    }
-  }
-
-  double tp_frame_importance =
-      1.0 + fabs((base_rdcost - hqr_rdcost) / arf_rdcost_high);
-
   for (int i = 0; i < frame_count; ++i) {
     FrameEncodeParameters param;
     const GopFrame &gop_frame = gop_struct.gop_frame_list[i];
@@ -2028,18 +2041,21 @@ StatusOr<GopEncodeInfo> AV1RateControlQMode::GetGopEncodeInfoWithTpl(
                gop_frame.update_type == GopFrameType::kRegularArf) {
       const TplFrameDepStats &frame_dep_stats =
           gop_dep_stats->frame_dep_stats_list[i];
-      const double cost_without_propagation =
-          TplFrameDepStatsAccumulateIntraCost(frame_dep_stats);
-      const double cost_with_propagation =
-          TplFrameDepStatsAccumulate(frame_dep_stats);
-      double frame_importance =
-          cost_with_propagation / cost_without_propagation;
 
+      double frame_importance;
       // TODO(jingning): Temporarily make the switch between single and
       // two TPL passes depending on the availability. This part of code
       // needs further modifications to support SB level calculation.
-      if (rc_param_.tpl_pass_count == TplPassCount::kTwoTplPasses)
-        frame_importance = tp_frame_importance;
+      if (rc_param_.tpl_pass_count == TplPassCount::kTwoTplPasses) {
+        frame_importance = GetFrameImportanceTwoPassTpl(
+            frame_dep_stats, rc_param_.frame_width, rc_param_.frame_height);
+      } else {
+        const double cost_without_propagation =
+            TplFrameDepStatsAccumulateIntraCost(frame_dep_stats);
+        const double cost_with_propagation =
+            TplFrameDepStatsAccumulate(frame_dep_stats);
+        frame_importance = cost_with_propagation / cost_without_propagation;
+      }
 
       // Imitate the behavior of av1_tpl_get_qstep_ratio()
       const double qstep_ratio = sqrt(1 / frame_importance);
