@@ -206,7 +206,7 @@ static void set_allintra_speed_feature_framesize_dependent(
   if (is_720p_or_larger) {
     // TODO(chiyotsai@google.com): make this speed feature adaptive based on
     // current block's vertical texture instead of hardcoded with resolution
-    sf->mv_sf.use_downsampled_sad = 1;
+    sf->mv_sf.use_downsampled_sad = 2;
   }
 
   if (speed >= 1) {
@@ -587,6 +587,13 @@ static void set_good_speed_feature_framesize_dependent(
   const int is_1080p_or_larger = AOMMIN(cm->width, cm->height) >= 1080;
   const int is_4k_or_larger = AOMMIN(cm->width, cm->height) >= 2160;
   const bool use_hbd = cpi->oxcf.use_highbitdepth;
+  // Speed features applicable for temporal filtering and tpl modules may be
+  // changed based on frame type at places where the sf is applied (Example :
+  // use_downsampled_sad). This is because temporal filtering and tpl modules
+  // are called before this function (except for the first key frame).
+  // TODO(deepa.kg@ittiam.com): For the speed features applicable to temporal
+  // filtering and tpl modules, modify the sf initialization appropriately
+  // before calling the modules.
   const int boosted = frame_is_boosted(cpi);
   const int is_boosted_arf2_bwd_type =
       boosted ||
@@ -625,7 +632,7 @@ static void set_good_speed_feature_framesize_dependent(
   if (is_720p_or_larger) {
     // TODO(chiyotsai@google.com): make this speed feature adaptive based on
     // current block's vertical texture instead of hardcoded with resolution
-    sf->mv_sf.use_downsampled_sad = 1;
+    sf->mv_sf.use_downsampled_sad = 2;
   }
 
   if (!is_720p_or_larger) {
@@ -779,6 +786,8 @@ static void set_good_speed_feature_framesize_dependent(
 
     if (is_480p_or_larger) {
       sf->tx_sf.tx_type_search.prune_tx_type_using_stats = 2;
+    } else {
+      sf->mv_sf.skip_fullpel_search_using_startmv = boosted ? 0 : 1;
     }
 
     sf->inter_sf.disable_interinter_wedge_var_thresh = UINT_MAX;
@@ -812,11 +821,13 @@ static void set_good_speed_feature_framesize_dependent(
 
     sf->inter_sf.skip_newmv_in_drl = 4;
     sf->inter_sf.prune_comp_ref_frames = 1;
+    sf->mv_sf.skip_fullpel_search_using_startmv = boosted ? 0 : 1;
 
     if (!is_720p_or_larger) {
       sf->inter_sf.mv_cost_upd_level = INTERNAL_COST_UPD_SBROW_SET;
       sf->inter_sf.prune_nearest_near_mv_using_refmv_weight =
           (boosted || allow_screen_content_tools) ? 0 : 1;
+      sf->mv_sf.use_downsampled_sad = 1;
     }
 
     if (!is_480p_or_larger) {
@@ -838,6 +849,8 @@ static void set_good_speed_feature_framesize_dependent(
     sf->inter_sf.prune_comp_ref_frames = 2;
     sf->inter_sf.prune_nearest_near_mv_using_refmv_weight =
         (boosted || allow_screen_content_tools) ? 0 : 1;
+    sf->mv_sf.skip_fullpel_search_using_startmv = boosted ? 0 : 2;
+
     if (is_720p_or_larger) {
       sf->part_sf.auto_max_partition_based_on_simple_motion = NOT_IN_USE;
     } else if (is_480p_or_larger) {
@@ -878,7 +891,6 @@ static void set_good_speed_feature_framesize_dependent(
     sf->lpf_sf.cdef_pick_method = CDEF_FAST_SEARCH_LVL4;
 
     sf->hl_sf.recode_tolerance = 55;
-    if (!is_480p_or_larger) sf->hl_sf.num_frames_used_in_tf = 3;
   }
 }
 
@@ -1237,6 +1249,8 @@ static void set_good_speed_features_framesize_independent(
   if (speed >= 6) {
     sf->hl_sf.disable_extra_sc_testing = 1;
     sf->hl_sf.second_alt_ref_filtering = 0;
+    sf->hl_sf.adjust_num_frames_for_arf_filtering =
+        allow_screen_content_tools ? 0 : 1;
 
     sf->inter_sf.prune_inter_modes_based_on_tpl = boosted ? 0 : 3;
     sf->inter_sf.selective_ref_frame = 6;
@@ -1260,7 +1274,6 @@ static void set_good_speed_features_framesize_independent(
 
     sf->mv_sf.simple_motion_subpel_force_stop = FULL_PEL;
     sf->mv_sf.use_bsize_dependent_search_method = 1;
-    sf->mv_sf.skip_fullpel_search_using_startmv = boosted ? 0 : 1;
 
     sf->tpl_sf.gop_length_decision_method = 3;
 
@@ -1859,7 +1872,7 @@ static AOM_INLINE void init_hl_sf(HIGH_LEVEL_SPEED_FEATURES *hl_sf) {
   hl_sf->superres_auto_search_type = SUPERRES_AUTO_ALL;
   hl_sf->disable_extra_sc_testing = 0;
   hl_sf->second_alt_ref_filtering = 1;
-  hl_sf->num_frames_used_in_tf = INT_MAX;
+  hl_sf->adjust_num_frames_for_arf_filtering = 0;
   hl_sf->accurate_bit_estimate = 0;
   hl_sf->weight_calc_level_in_tf = 0;
 }
@@ -2309,9 +2322,9 @@ void av1_set_speed_features_framesize_independent(AV1_COMP *cpi, int speed) {
     // multi-threaded, enabling the Loop restoration stage will cause an
     // increase in encode time (3% to 7% increase depends on frame
     // resolution).
-    // TODO(any): Implement multi-threading of av1_pick_filter_restoration()
-    // and enable Wiener filter for speed 5, 6 similar to single thread
-    // encoding path.
+    // TODO(aomedia:3446): Implement multi-threading of
+    // av1_pick_filter_restoration() and enable Wiener filter for speed 5, 6
+    // similar to single thread encoding path.
     if (speed >= 5) {
       sf->lpf_sf.disable_sgr_filter = true;
       sf->lpf_sf.disable_wiener_filter = true;

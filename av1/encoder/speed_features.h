@@ -432,10 +432,10 @@ typedef struct HIGH_LEVEL_SPEED_FEATURES {
   int second_alt_ref_filtering;
 
   /*!
-   * Number of frames to be used in temporal filtering controlled based on noise
-   * levels and arf-q.
+   * The number of frames to be used during temporal filtering of an ARF frame
+   * is adjusted based on noise level of the current frame.
    */
-  int num_frames_used_in_tf;
+  int adjust_num_frames_for_arf_filtering;
 
   /*!
    * Decide the bit estimation approach used in qindex decision.
@@ -808,7 +808,16 @@ typedef struct MV_SPEED_FEATURES {
   int full_pixel_search_level;
 
   // Whether to downsample the rows in sad calculation during motion search.
-  // This is only active when there are at least 16 rows.
+  // This is only active when there are at least 16 rows. When this sf is
+  // active, if there is a large discrepancy in the SAD values for the final
+  // motion vector between skipping vs not skipping, motion search is redone
+  // with skip row features off.
+  // 0: Disabled (do not downsample rows)
+  // 1: Skip SAD calculation of odd rows if the SAD deviation of the even and
+  //    odd rows for the starting MV is small. Redo motion search with sf off
+  //    when SAD deviation is high for the final motion vector.
+  // 2: Skip SAD calculation of odd rows. SAD deviation is not tested for the
+  //    start MV and tested only for the final MV.
   int use_downsampled_sad;
 
   // Enable/disable extensive joint motion search.
@@ -821,6 +830,9 @@ typedef struct MV_SPEED_FEATURES {
   int disable_second_mv;
 
   // Skips full pixel search based on start mv of prior ref_mv_idx.
+  // 0: Disabled
+  // 1: Skips the full pixel search upto 4 neighbor full-pel MV positions.
+  // 2: Skips the full pixel search upto 8 neighbor full-pel MV positions.
   int skip_fullpel_search_using_startmv;
 
   // Method to use for refining WARPED_CAUSAL motion vectors

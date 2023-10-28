@@ -321,16 +321,26 @@ if (aom_config("CONFIG_AV1_HIGHBITDEPTH") eq "yes") {
   specialize qw/aom_highbd_dc_predictor_32x32 sse2 neon/;
   specialize qw/aom_highbd_dc_predictor_64x64 neon/;
 
-  specialize qw/aom_highbd_h_predictor_4x4 sse2/;
-  specialize qw/aom_highbd_h_predictor_4x8 sse2/;
-  specialize qw/aom_highbd_h_predictor_8x4 sse2/;
-  specialize qw/aom_highbd_h_predictor_8x8 sse2/;
-  specialize qw/aom_highbd_h_predictor_8x16 sse2/;
-  specialize qw/aom_highbd_h_predictor_16x8 sse2/;
-  specialize qw/aom_highbd_h_predictor_16x16 sse2/;
-  specialize qw/aom_highbd_h_predictor_16x32 sse2/;
-  specialize qw/aom_highbd_h_predictor_32x16 sse2/;
-  specialize qw/aom_highbd_h_predictor_32x32 sse2/;
+  specialize qw/aom_highbd_h_predictor_4x4 sse2 neon/;
+  specialize qw/aom_highbd_h_predictor_4x8 sse2 neon/;
+  specialize qw/aom_highbd_h_predictor_4x16 neon/;
+  specialize qw/aom_highbd_h_predictor_8x4 sse2 neon/;
+  specialize qw/aom_highbd_h_predictor_8x8 sse2 neon/;
+  specialize qw/aom_highbd_h_predictor_8x16 sse2 neon/;
+  specialize qw/aom_highbd_h_predictor_8x32 neon/;
+  specialize qw/aom_highbd_h_predictor_16x4 neon/;
+  specialize qw/aom_highbd_h_predictor_16x8 sse2 neon/;
+  specialize qw/aom_highbd_h_predictor_16x16 sse2 neon/;
+  specialize qw/aom_highbd_h_predictor_16x32 sse2 neon/;
+  specialize qw/aom_highbd_h_predictor_16x64 neon/;
+  specialize qw/aom_highbd_h_predictor_32x8 neon/;
+  specialize qw/aom_highbd_h_predictor_32x16 sse2 neon/;
+  specialize qw/aom_highbd_h_predictor_32x32 sse2 neon/;
+  specialize qw/aom_highbd_h_predictor_32x64 neon/;
+  specialize qw/aom_highbd_h_predictor_64x16 neon/;
+  specialize qw/aom_highbd_h_predictor_64x32 neon/;
+  specialize qw/aom_highbd_h_predictor_64x64 neon/;
+
   specialize qw/aom_highbd_dc_left_predictor_4x4 sse2/;
   specialize qw/aom_highbd_dc_top_predictor_4x4 sse2/;
   specialize qw/aom_highbd_dc_128_predictor_4x4 sse2/;
@@ -1046,21 +1056,29 @@ if (aom_config("CONFIG_AV1_ENCODER") eq "yes") {
   specialize qw/aom_sad_skip_4x8x4d          sse2 neon/;
   specialize qw/aom_sad_skip_4x4x4d               neon/;
 
-  specialize qw/aom_sad128x128x3d avx2/;
-  specialize qw/aom_sad128x64x3d  avx2/;
-  specialize qw/aom_sad64x128x3d  avx2/;
-  specialize qw/aom_sad64x64x3d   avx2/;
-  specialize qw/aom_sad64x32x3d   avx2/;
-  specialize qw/aom_sad32x64x3d   avx2/;
-  specialize qw/aom_sad32x32x3d   avx2/;
-  specialize qw/aom_sad32x16x3d   avx2/;
-  specialize qw/aom_sad16x32x3d   avx2/;
-  specialize qw/aom_sad16x16x3d   avx2/;
-  specialize qw/aom_sad16x8x3d    avx2/;
+  specialize qw/aom_sad128x128x3d neon avx2/;
+  specialize qw/aom_sad128x64x3d  neon avx2/;
+  specialize qw/aom_sad64x128x3d  neon avx2/;
+  specialize qw/aom_sad64x64x3d   neon avx2/;
+  specialize qw/aom_sad64x32x3d   neon avx2/;
+  specialize qw/aom_sad32x64x3d   neon avx2/;
+  specialize qw/aom_sad32x32x3d   neon avx2/;
+  specialize qw/aom_sad32x16x3d   neon avx2/;
+  specialize qw/aom_sad16x32x3d   neon avx2/;
+  specialize qw/aom_sad16x16x3d   neon avx2/;
+  specialize qw/aom_sad16x8x3d    neon avx2/;
+  specialize qw/aom_sad8x16x3d    neon/;
+  specialize qw/aom_sad8x8x3d     neon/;
+  specialize qw/aom_sad8x4x3d     neon/;
+  specialize qw/aom_sad4x8x3d     neon/;
+  specialize qw/aom_sad4x4x3d     neon/;
 
-  specialize qw/aom_sad64x16x3d   avx2/;
-  specialize qw/aom_sad32x8x3d    avx2/;
-  specialize qw/aom_sad16x64x3d   avx2/;
+  specialize qw/aom_sad64x16x3d   neon avx2/;
+  specialize qw/aom_sad32x8x3d    neon avx2/;
+  specialize qw/aom_sad16x64x3d   neon avx2/;
+  specialize qw/aom_sad16x4x3d    neon/;
+  specialize qw/aom_sad8x32x3d    neon/;
+  specialize qw/aom_sad4x16x3d    neon/;
 
   specialize qw/aom_masked_sad128x128x4d  ssse3/;
   specialize qw/aom_masked_sad128x64x4d   ssse3/;
@@ -1181,9 +1199,11 @@ if (aom_config("CONFIG_AV1_ENCODER") eq "yes") {
 
   if (aom_config("CONFIG_AV1_HIGHBITDEPTH") eq "yes") {
     add_proto qw/unsigned int aom_highbd_avg_8x8/, "const uint8_t *, int p";
+    specialize qw/aom_highbd_avg_8x8 neon/;
     add_proto qw/unsigned int aom_highbd_avg_4x4/, "const uint8_t *, int p";
     specialize qw/aom_highbd_avg_4x4 neon/;
     add_proto qw/void aom_highbd_minmax_8x8/, "const uint8_t *s, int p, const uint8_t *d, int dp, int *min, int *max";
+    specialize qw/aom_highbd_minmax_8x8 neon/;
   }
 
   add_proto qw/void aom_int_pro_row/, "int16_t *hbuf, const uint8_t *ref, const int ref_stride, const int width, const int height, int norm_factor";
