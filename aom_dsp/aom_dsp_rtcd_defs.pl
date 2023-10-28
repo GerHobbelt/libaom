@@ -16,8 +16,8 @@ print <<EOF
 
 #include "aom/aom_integer.h"
 #include "aom_dsp/aom_dsp_common.h"
-#include "av1/common/enums.h"
 #include "av1/common/blockd.h"
+#include "av1/common/enums.h"
 
 EOF
 }
@@ -1262,9 +1262,6 @@ if (aom_config("CONFIG_AV1_ENCODER") eq "yes") {
   add_proto qw/void aom_hadamard_lp_8x8_dual/, "const int16_t *src_diff, ptrdiff_t src_stride, int16_t *coeff";
   specialize qw/aom_hadamard_lp_8x8_dual sse2 avx2 neon/;
 
-  add_proto qw/void aom_pixel_scale/, "const int16_t *src_diff, ptrdiff_t src_stride, int16_t *coeff, int log_scale, int h8, int w8";
-  specialize qw/aom_pixel_scale sse2/;
-
   if (aom_config("CONFIG_AV1_HIGHBITDEPTH") eq "yes") {
     add_proto qw/void aom_highbd_hadamard_8x8/, "const int16_t *src_diff, ptrdiff_t src_stride, tran_low_t *coeff";
     specialize qw/aom_highbd_hadamard_8x8 avx2/;
@@ -1545,7 +1542,7 @@ if (aom_config("CONFIG_AV1_ENCODER") eq "yes") {
       add_proto qw/unsigned int/, "aom_obmc_variance${w}x${h}", "const uint8_t *pre, int pre_stride, const int32_t *wsrc, const int32_t *mask, unsigned int *sse";
       add_proto qw/unsigned int/, "aom_obmc_sub_pixel_variance${w}x${h}", "const uint8_t *pre, int pre_stride, int xoffset, int yoffset, const int32_t *wsrc, const int32_t *mask, unsigned int *sse";
       specialize "aom_obmc_variance${w}x${h}", qw/sse4_1 avx2 neon/;
-      specialize "aom_obmc_sub_pixel_variance${w}x${h}", q/sse4_1/;
+      specialize "aom_obmc_sub_pixel_variance${w}x${h}", qw/sse4_1 neon/;
     }
 
     if (aom_config("CONFIG_AV1_HIGHBITDEPTH") eq "yes") {

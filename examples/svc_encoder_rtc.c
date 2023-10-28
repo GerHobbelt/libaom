@@ -25,7 +25,6 @@
 #endif
 #include "aom/aom_encoder.h"
 #include "aom/aomcx.h"
-#include "av1/common/enums.h"
 #include "common/args.h"
 #include "common/tools_common.h"
 #include "common/video_writer.h"
@@ -438,10 +437,10 @@ static void parse_command_line(int argc, const char **argv_,
       enc_cfg->rc_target_bitrate, enc_cfg->kf_max_dist);
 }
 
-static unsigned int mode_to_num_temporal_layers[11] = { 1, 2, 3, 3, 2, 1,
-                                                        1, 3, 3, 3, 3 };
-static unsigned int mode_to_num_spatial_layers[11] = { 1, 1, 1, 1, 1, 2,
-                                                       3, 2, 3, 3, 3 };
+static int mode_to_num_temporal_layers[11] = {
+  1, 2, 3, 3, 2, 1, 1, 3, 3, 3, 3
+};
+static int mode_to_num_spatial_layers[11] = { 1, 1, 1, 1, 1, 2, 3, 2, 3, 3, 3 };
 
 // For rate control encoding stats.
 struct RateControlMetrics {
@@ -470,6 +469,10 @@ struct RateControlMetrics {
   int window_count;
   int layer_target_bitrate[AOM_MAX_LAYERS];
 };
+
+static const int REF_FRAMES = 8;
+
+static const int INTER_REFS_PER_FRAME = 7;
 
 // Reference frames used in this example encoder.
 enum {
@@ -508,9 +511,8 @@ static void close_input_file(struct AvxInputContext *input) {
 // TODO(marpan): Update these metrics to account for multiple key frames
 // in the stream.
 static void set_rate_control_metrics(struct RateControlMetrics *rc,
-                                     double framerate,
-                                     unsigned int ss_number_layers,
-                                     unsigned int ts_number_layers) {
+                                     double framerate, int ss_number_layers,
+                                     int ts_number_layers) {
   int ts_rate_decimator[AOM_MAX_TS_LAYERS] = { 1 };
   ts_rate_decimator[0] = 1;
   if (ts_number_layers == 2) {
@@ -524,12 +526,12 @@ static void set_rate_control_metrics(struct RateControlMetrics *rc,
   }
   // Set the layer (cumulative) framerate and the target layer (non-cumulative)
   // per-frame-bandwidth, for the rate control encoding stats below.
-  for (unsigned int sl = 0; sl < ss_number_layers; ++sl) {
-    unsigned int i = sl * ts_number_layers;
+  for (int sl = 0; sl < ss_number_layers; ++sl) {
+    int i = sl * ts_number_layers;
     rc->layer_framerate[0] = framerate / ts_rate_decimator[0];
     rc->layer_pfb[i] =
         1000.0 * rc->layer_target_bitrate[i] / rc->layer_framerate[0];
-    for (unsigned int tl = 0; tl < ts_number_layers; ++tl) {
+    for (int tl = 0; tl < ts_number_layers; ++tl) {
       i = sl * ts_number_layers + tl;
       if (tl > 0) {
         rc->layer_framerate[tl] = framerate / ts_rate_decimator[tl];
@@ -552,17 +554,16 @@ static void set_rate_control_metrics(struct RateControlMetrics *rc,
 }
 
 static void printout_rate_control_summary(struct RateControlMetrics *rc,
-                                          int frame_cnt,
-                                          unsigned int ss_number_layers,
-                                          unsigned int ts_number_layers) {
+                                          int frame_cnt, int ss_number_layers,
+                                          int ts_number_layers) {
   int tot_num_frames = 0;
   double perc_fluctuation = 0.0;
   printf("Total number of processed frames: %d\n\n", frame_cnt - 1);
-  printf("Rate control layer stats for %u layer(s):\n\n", ts_number_layers);
-  for (unsigned int sl = 0; sl < ss_number_layers; ++sl) {
+  printf("Rate control layer stats for %d layer(s):\n\n", ts_number_layers);
+  for (int sl = 0; sl < ss_number_layers; ++sl) {
     tot_num_frames = 0;
-    for (unsigned int tl = 0; tl < ts_number_layers; ++tl) {
-      unsigned int i = sl * ts_number_layers + tl;
+    for (int tl = 0; tl < ts_number_layers; ++tl) {
+      int i = sl * ts_number_layers + tl;
       const int num_dropped =
           tl > 0 ? rc->layer_input_frames[tl] - rc->layer_enc_frames[tl]
                  : rc->layer_input_frames[tl] - rc->layer_enc_frames[tl] - 1;
@@ -574,7 +575,7 @@ static void printout_rate_control_summary(struct RateControlMetrics *rc,
           rc->layer_avg_frame_size[i] / rc->layer_enc_frames[tl];
       rc->layer_avg_rate_mismatch[i] =
           100.0 * rc->layer_avg_rate_mismatch[i] / rc->layer_enc_frames[tl];
-      printf("For layer#: %u %u \n", sl, tl);
+      printf("For layer#: %d %d \n", sl, tl);
       printf("Bitrate (target vs actual): %d %f\n", rc->layer_target_bitrate[i],
              rc->layer_encoding_bitrate[i]);
       printf("Average frame size (target vs actual): %f %f\n", rc->layer_pfb[i],
@@ -720,7 +721,7 @@ static void set_layer_pattern(
         // Refresh lag_index slot, needed for lagging golen.
         ref_frame_config->refresh[lag_index] = 1;
         // Refresh GOLDEN every x base layer frames.
-        if (base_count % 16 == 0) ref_frame_config->refresh[3] = 1;
+        if (base_count % 32 == 0) ref_frame_config->refresh[3] = 1;
       } else {
         layer_id->temporal_layer_id = 1;
         // No updates on layer 1, reference LAST (TL0).
@@ -1207,7 +1208,7 @@ int main(int argc, const char **argv) {
   int frame_avail;
   int got_data = 0;
   int flags = 0;
-  unsigned i;
+  int i;
   int pts = 0;             // PTS starts at 0.
   int frame_duration = 1;  // 1 timebase tick per frame.
   aom_svc_layer_id_t layer_id;
@@ -1278,8 +1279,8 @@ int main(int argc, const char **argv) {
 
   parse_command_line(argc, argv, &app_input, &svc_params, &cfg);
 
-  unsigned int ts_number_layers = svc_params.number_temporal_layers;
-  unsigned int ss_number_layers = svc_params.number_spatial_layers;
+  int ts_number_layers = svc_params.number_temporal_layers;
+  int ss_number_layers = svc_params.number_spatial_layers;
 
   unsigned int width = cfg.g_w;
   unsigned int height = cfg.g_h;
@@ -1343,11 +1344,11 @@ int main(int argc, const char **argv) {
   info.time_base.numerator = cfg.g_timebase.num;
   info.time_base.denominator = cfg.g_timebase.den;
   // Open an output file for each stream.
-  for (unsigned int sl = 0; sl < ss_number_layers; ++sl) {
-    for (unsigned tl = 0; tl < ts_number_layers; ++tl) {
+  for (int sl = 0; sl < ss_number_layers; ++sl) {
+    for (int tl = 0; tl < ts_number_layers; ++tl) {
       i = sl * ts_number_layers + tl;
       char file_name[PATH_MAX];
-      snprintf(file_name, sizeof(file_name), "%s_%u.av1",
+      snprintf(file_name, sizeof(file_name), "%s_%d.av1",
                app_input.output_filename, i);
       if (app_input.output_obu) {
         obu_files[i] = fopen(file_name, "wb");
@@ -1407,9 +1408,10 @@ int main(int argc, const char **argv) {
   aom_codec_control(&codec, AV1E_SET_ENABLE_FILTER_INTRA, 0);
   aom_codec_control(&codec, AV1E_SET_INTRA_DEFAULT_TX_ONLY, 1);
 
-  aom_codec_control(&codec, AV1E_SET_TILE_COLUMNS,
-                    cfg.g_threads ? (int)log2(cfg.g_threads) : 0);
-  if (cfg.g_threads > 1) aom_codec_control(&codec, AV1E_SET_ROW_MT, 1);
+  if (cfg.g_threads > 1) {
+    aom_codec_control(&codec, AV1E_SET_TILE_COLUMNS,
+                      (unsigned int)log2(cfg.g_threads));
+  }
 
   aom_codec_control(&codec, AV1E_SET_TUNE_CONTENT, app_input.tune_content);
   if (app_input.tune_content == AOM_CONTENT_SCREEN) {
@@ -1450,7 +1452,7 @@ int main(int argc, const char **argv) {
                       max_intra_size_pct);
   }
 
-  for (unsigned int lx = 0; lx < ts_number_layers * ss_number_layers; lx++) {
+  for (int lx = 0; lx < ts_number_layers * ss_number_layers; lx++) {
     cx_time_layer[lx] = 0;
     frame_cnt_layer[lx] = 0;
   }
@@ -1460,7 +1462,7 @@ int main(int argc, const char **argv) {
     struct aom_usec_timer timer;
     frame_avail = read_frame(&(app_input.input_ctx), &raw);
     // Loop over spatial layers.
-    for (unsigned int slx = 0; slx < ss_number_layers; slx++) {
+    for (int slx = 0; slx < ss_number_layers; slx++) {
       aom_codec_iter_t iter = NULL;
       const aom_codec_cx_pkt_t *pkt;
       int layer = 0;
@@ -1582,11 +1584,11 @@ int main(int argc, const char **argv) {
       while ((pkt = aom_codec_get_cx_data(&codec, &iter))) {
         switch (pkt->kind) {
           case AOM_CODEC_CX_FRAME_PKT:
-            for (unsigned int sl = layer_id.spatial_layer_id;
-                 sl < ss_number_layers; ++sl) {
-              for (unsigned tl = layer_id.temporal_layer_id;
-                   tl < ts_number_layers; ++tl) {
-                unsigned int j = sl * ts_number_layers + tl;
+            for (int sl = layer_id.spatial_layer_id; sl < ss_number_layers;
+                 ++sl) {
+              for (int tl = layer_id.temporal_layer_id; tl < ts_number_layers;
+                   ++tl) {
+                int j = sl * ts_number_layers + tl;
                 if (app_input.output_obu) {
                   fwrite(pkt->data.frame.buf, 1, pkt->data.frame.sz,
                          obu_files[j]);
@@ -1594,7 +1596,7 @@ int main(int argc, const char **argv) {
                   aom_video_writer_write_frame(outfile[j], pkt->data.frame.buf,
                                                pkt->data.frame.sz, pts);
                 }
-                if (sl == (unsigned int)layer_id.spatial_layer_id)
+                if (sl == layer_id.spatial_layer_id)
                   rc.layer_encoding_bitrate[j] += 8.0 * pkt->data.frame.sz;
               }
             }
@@ -1610,8 +1612,9 @@ int main(int argc, const char **argv) {
             }
             // Keep count of rate control stats per layer (for non-key).
             if (!(pkt->data.frame.flags & AOM_FRAME_IS_KEY)) {
-              unsigned int j = layer_id.spatial_layer_id * ts_number_layers +
-                               layer_id.temporal_layer_id;
+              int j = layer_id.spatial_layer_id * ts_number_layers +
+                      layer_id.temporal_layer_id;
+              assert(j >= 0);
               rc.layer_avg_frame_size[j] += 8.0 * pkt->data.frame.sz;
               rc.layer_avg_rate_mismatch[j] +=
                   fabs(8.0 * pkt->data.frame.sz - rc.layer_pfb[j]) /
@@ -1653,7 +1656,7 @@ int main(int argc, const char **argv) {
 #if CONFIG_AV1_DECODER
             if (app_input.decode) {
               if (aom_codec_decode(&decoder, pkt->data.frame.buf,
-                                   (unsigned int)pkt->data.frame.sz, NULL))
+                                   pkt->data.frame.sz, NULL))
                 die_codec(&decoder, "Failed to decode frame");
             }
 #endif
@@ -1668,7 +1671,7 @@ int main(int argc, const char **argv) {
         // they are non reference frames.
         if ((ss_number_layers > 1 || ts_number_layers > 1) &&
             !(layer_id.temporal_layer_id > 0 &&
-              layer_id.temporal_layer_id == (int)ts_number_layers - 1)) {
+              layer_id.temporal_layer_id == ts_number_layers - 1)) {
           if (test_decode(&codec, &decoder, frame_cnt)) {
 #if CONFIG_INTERNAL_STATS
             fprintf(stats_file, "First mismatch occurred in frame %d\n",
@@ -1690,8 +1693,8 @@ int main(int argc, const char **argv) {
                                 ts_number_layers);
 
   printf("\n");
-  for (unsigned int slx = 0; slx < ss_number_layers; slx++)
-    for (unsigned int tlx = 0; tlx < ts_number_layers; tlx++) {
+  for (int slx = 0; slx < ss_number_layers; slx++)
+    for (int tlx = 0; tlx < ts_number_layers; tlx++) {
       int lx = slx * ts_number_layers + tlx;
       printf("Per layer encoding time/FPS stats for encoder: %d %d %d %f %f \n",
              slx, tlx, frame_cnt_layer[lx],
