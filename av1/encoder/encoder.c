@@ -1528,7 +1528,7 @@ AV1_COMP *av1_create_compressor(AV1_PRIMARY *ppi, const AV1EncoderConfig *oxcf,
     CHECK_MEM_ERROR(cm, cpi->saliency_map,
                     (uint8_t *)aom_calloc(cm->height * cm->width,
                                           sizeof(*cpi->saliency_map)));
-    // Buffer initialization based on MIN_MIB_SIZE_LOG2 to insure that
+    // Buffer initialization based on MIN_MIB_SIZE_LOG2 to ensure that
     // cpi->sm_scaling_factor buffer is allocated big enough, since we have no
     // idea of the actual superblock size we gonna use yet.
     const int min_mi_w_sb = (1 << MIN_MIB_SIZE_LOG2);
@@ -3536,7 +3536,7 @@ static void calculate_frame_avg_haar_energy(AV1_COMP *cpi) {
       src, stride, hbd, num_8x8_rows, num_8x8_cols);
 
   cpi->twopass_frame.frame_avg_haar_energy =
-      log(((double)frame_avg_wavelet_energy / num_mbs) + 1.0);
+      log1p((double)frame_avg_wavelet_energy / num_mbs);
 }
 #endif
 
@@ -3749,7 +3749,11 @@ static int encode_frame_to_data_rate(AV1_COMP *cpi, size_t *size,
     if (av1_set_saliency_map(cpi) == 0) {
       return AOM_CODEC_MEM_ERROR;
     }
+#if !CONFIG_REALTIME_ONLY
     double motion_ratio = av1_setup_motion_ratio(cpi);
+#else
+    double motion_ratio = 1.0;
+#endif
     if (av1_setup_sm_rdmult_scaling_factor(cpi, motion_ratio) == 0) {
       return AOM_CODEC_MEM_ERROR;
     }

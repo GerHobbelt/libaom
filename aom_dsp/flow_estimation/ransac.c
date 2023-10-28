@@ -286,7 +286,7 @@ static bool ransac_internal(const Correspondence *matched_points, int npoints,
 
   double *points1, *points2;
   double *corners1, *corners2;
-  double *image1_coord;
+  double *projected_corners;
 
   // Store information for the num_desired_motions best transformations found
   // and the worst motion among them, as well as the motion currently under
@@ -309,26 +309,35 @@ static bool ransac_internal(const Correspondence *matched_points, int npoints,
   points2 = (double *)aom_malloc(sizeof(*points2) * npoints * 2);
   corners1 = (double *)aom_malloc(sizeof(*corners1) * npoints * 2);
   corners2 = (double *)aom_malloc(sizeof(*corners2) * npoints * 2);
-  image1_coord = (double *)aom_malloc(sizeof(*image1_coord) * npoints * 2);
-
+  projected_corners =
+      (double *)aom_malloc(sizeof(*projected_corners) * npoints * 2);
   motions =
       (RANSAC_MOTION *)aom_malloc(sizeof(RANSAC_MOTION) * num_desired_motions);
-  for (i = 0; i < num_desired_motions; ++i) {
-    motions[i].inlier_indices =
-        (int *)aom_malloc(sizeof(*motions->inlier_indices) * npoints);
-    clear_motion(motions + i, npoints);
-  }
-  current_motion.inlier_indices =
-      (int *)aom_malloc(sizeof(*current_motion.inlier_indices) * npoints);
-  clear_motion(&current_motion, npoints);
 
-  worst_kept_motion = motions;
+  // Allocate one large buffer which will be carved up to store the inlier
+  // indices for the current motion plus the num_desired_motions many
+  // output models
+  // This allows us to keep the allocation/deallocation logic simple, without
+  // having to (for example) check that `motions` is non-null before allocating
+  // the inlier arrays
+  int *inlier_buffer = (int *)aom_malloc(sizeof(*inlier_buffer) * npoints *
+                                         (num_desired_motions + 1));
 
-  if (!(points1 && points2 && corners1 && corners2 && image1_coord && motions &&
-        current_motion.inlier_indices)) {
+  if (!(points1 && points2 && corners1 && corners2 && projected_corners &&
+        motions && inlier_buffer)) {
     ret_val = false;
     goto finish_ransac;
   }
+
+  // Once all our allocations are known-good, we can fill in our structures
+  worst_kept_motion = motions;
+
+  for (i = 0; i < num_desired_motions; ++i) {
+    motions[i].inlier_indices = inlier_buffer + i * npoints;
+    clear_motion(motions + i, npoints);
+  }
+  current_motion.inlier_indices = inlier_buffer + num_desired_motions * npoints;
+  clear_motion(&current_motion, npoints);
 
   for (i = 0; i < npoints; ++i) {
     corners1[2 * i + 0] = matched_points[i].x;
@@ -352,14 +361,14 @@ static bool ransac_internal(const Correspondence *matched_points, int npoints,
       continue;
     }
 
-    model_info->project_points(params_this_motion, corners1, image1_coord,
+    model_info->project_points(params_this_motion, corners1, projected_corners,
                                npoints, 2, 2);
 
     current_motion.num_inliers = 0;
     double sse = 0.0;
     for (i = 0; i < npoints; ++i) {
-      double dx = image1_coord[i * 2] - corners2[i * 2];
-      double dy = image1_coord[i * 2 + 1] - corners2[i * 2 + 1];
+      double dx = projected_corners[i * 2] - corners2[i * 2];
+      double dy = projected_corners[i * 2 + 1] - corners2[i * 2 + 1];
       double squared_error = dx * dx + dy * dy;
 
       if (squared_error < INLIER_THRESHOLD_SQUARED) {
@@ -421,18 +430,13 @@ static bool ransac_internal(const Correspondence *matched_points, int npoints,
   }
 
 finish_ransac:
-  aom_free(points1);
-  aom_free(points2);
-  aom_free(corners1);
+  aom_free(inlier_buffer);
+  aom_free(motions);
+  aom_free(projected_corners);
   aom_free(corners2);
-  aom_free(image1_coord);
-  aom_free(current_motion.inlier_indices);
-  if (motions) {
-    for (i = 0; i < num_desired_motions; ++i) {
-      aom_free(motions[i].inlier_indices);
-    }
-    aom_free(motions);
-  }
+  aom_free(corners1);
+  aom_free(points2);
+  aom_free(points1);
 
   return ret_val;
 }
