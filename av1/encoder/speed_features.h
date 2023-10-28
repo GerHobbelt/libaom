@@ -954,14 +954,9 @@ typedef struct INTER_MODE_SPEED_FEATURES {
   int prune_comp_using_best_single_mode_ref;
 
   // Skip NEARESTMV and NEARMV using weight computed in ref mv list population
-  // This speed feature sometimes leads to severe visual artifacts for
-  // the overlay frame. It makes inter RD mode search skip NEARESTMV
-  // and NEARMV, and no valid inter mode is evaluated when the NEWMV mode
-  // is also early terminated due to the constraint that it does not handle
-  // zero mv difference. In this cases, intra modes will be chosen, leading
-  // to bad prediction and flickering artifacts.
-  // Turn off this feature for now. Be careful to check visual quality if
-  // anyone is going to turn it on.
+  //
+  // Pruning is enabled only when both the top and left neighbor blocks are
+  // available and when the current block already has a valid inter prediction.
   int prune_nearest_near_mv_using_refmv_weight;
 
   // Based on previous ref_mv_idx search result, prune the following search.
@@ -1432,8 +1427,14 @@ typedef struct LOOP_FILTER_SPEED_FEATURES {
   // Reduce the wiener filter win size for luma
   int reduce_wiener_window_size;
 
-  // Disable loop restoration filter
-  int disable_lr_filter;
+  // Flag to disable Wiener Loop restoration filter.
+  bool disable_wiener_filter;
+
+  // Flag to disable Self-guided Loop restoration filter.
+  bool disable_sgr_filter;
+
+  // Disable the refinement search around the wiener filter coefficients.
+  bool disable_wiener_coeff_refine_search;
 
   // Whether to downsample the rows in computation of wiener stats.
   int use_downsampled_wiener_stats;
