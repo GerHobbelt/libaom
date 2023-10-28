@@ -497,9 +497,9 @@ add_proto qw/void aom_convolve_copy/,             "const uint8_t *src, ptrdiff_t
 add_proto qw/void aom_convolve8_horiz/,           "const uint8_t *src, ptrdiff_t src_stride, uint8_t *dst, ptrdiff_t dst_stride, const int16_t *filter_x, int x_step_q4, const int16_t *filter_y, int y_step_q4, int w, int h";
 add_proto qw/void aom_convolve8_vert/,            "const uint8_t *src, ptrdiff_t src_stride, uint8_t *dst, ptrdiff_t dst_stride, const int16_t *filter_x, int x_step_q4, const int16_t *filter_y, int y_step_q4, int w, int h";
 
-specialize qw/aom_convolve_copy       neon sse2 avx2/;
-specialize qw/aom_convolve8_horiz     neon sse2 ssse3/, "$avx2_ssse3";
-specialize qw/aom_convolve8_vert      neon sse2 ssse3/, "$avx2_ssse3";
+specialize qw/aom_convolve_copy       neon                        sse2 avx2/;
+specialize qw/aom_convolve8_horiz     neon neon_dotprod neon_i8mm sse2 ssse3/, "$avx2_ssse3";
+specialize qw/aom_convolve8_vert      neon neon_dotprod neon_i8mm sse2 ssse3/, "$avx2_ssse3";
 
 add_proto qw/void aom_scaled_2d/, "const uint8_t *src, ptrdiff_t src_stride, uint8_t *dst, ptrdiff_t dst_stride, const InterpKernel *filter, int x0_q4, int x_step_q4, int y0_q4, int y_step_q4, int w, int h";
 specialize qw/aom_scaled_2d ssse3 neon/;
@@ -776,7 +776,7 @@ if (aom_config("CONFIG_AV1_ENCODER") eq "yes") {
   specialize qw/aom_sse  sse4_1 avx2 neon/;
 
   add_proto qw/void/, "aom_get_blk_sse_sum", "const int16_t *data, int stride, int bw, int bh, int *x_sum, int64_t *x2_sum";
-  specialize qw/aom_get_blk_sse_sum sse2 avx2/;
+  specialize qw/aom_get_blk_sse_sum sse2 avx2 neon/;
 
   if (aom_config("CONFIG_AV1_HIGHBITDEPTH") eq "yes") {
     add_proto qw/void aom_highbd_subtract_block/, "int rows, int cols, int16_t *diff_ptr, ptrdiff_t diff_stride, const uint8_t *src_ptr, ptrdiff_t src_stride, const uint8_t *pred_ptr, ptrdiff_t pred_stride";
@@ -1032,7 +1032,7 @@ if (aom_config("CONFIG_AV1_ENCODER") eq "yes") {
         ($w, $h) = @$_;
         add_proto qw/unsigned int/, "aom_highbd_obmc_sad${w}x${h}", "const uint8_t *pre, int pre_stride, const int32_t *wsrc, const int32_t *mask";
         if (! (($w == 128 && $h == 32) || ($w == 32 && $h == 128))) {
-          specialize "aom_highbd_obmc_sad${w}x${h}", qw/sse4_1 avx2/;
+          specialize "aom_highbd_obmc_sad${w}x${h}", qw/sse4_1 avx2 neon/;
         }
       }
     }

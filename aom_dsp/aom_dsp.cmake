@@ -121,6 +121,12 @@ list(APPEND AOM_DSP_COMMON_INTRIN_NEON
             "${AOM_ROOT}/aom_dsp/arm/blend_a64_mask_neon.c"
             "${AOM_ROOT}/aom_dsp/arm/avg_pred_neon.c")
 
+list(APPEND AOM_DSP_COMMON_INTRIN_NEON_DOTPROD
+            "${AOM_ROOT}/aom_dsp/arm/aom_convolve8_neon_dotprod.c")
+
+list(APPEND AOM_DSP_COMMON_INTRIN_NEON_I8MM
+            "${AOM_ROOT}/aom_dsp/arm/aom_convolve8_neon_i8mm.c")
+
 if(CONFIG_AV1_HIGHBITDEPTH)
   list(APPEND AOM_DSP_COMMON_INTRIN_SSE2
               "${AOM_ROOT}/aom_dsp/x86/highbd_convolve_sse2.c"
@@ -270,7 +276,8 @@ if(CONFIG_AV1_ENCODER)
               "${AOM_ROOT}/aom_dsp/arm/obmc_variance_neon.c"
               "${AOM_ROOT}/aom_dsp/arm/obmc_sad_neon.c"
               "${AOM_ROOT}/aom_dsp/arm/sse_neon.c"
-              "${AOM_ROOT}/aom_dsp/arm/sum_squares_neon.c")
+              "${AOM_ROOT}/aom_dsp/arm/sum_squares_neon.c"
+              "${AOM_ROOT}/aom_dsp/arm/blk_sse_sum_neon.c")
 
   if(CONFIG_AV1_HIGHBITDEPTH)
     list(APPEND AOM_DSP_ENCODER_ASM_SSE2
@@ -296,6 +303,7 @@ if(CONFIG_AV1_ENCODER)
                 "${AOM_ROOT}/aom_dsp/arm/highbd_avg_pred_neon.c"
                 "${AOM_ROOT}/aom_dsp/arm/highbd_hadamard_neon.c"
                 "${AOM_ROOT}/aom_dsp/arm/highbd_masked_sad_neon.c"
+                "${AOM_ROOT}/aom_dsp/arm/highbd_obmc_sad_neon.c"
                 "${AOM_ROOT}/aom_dsp/arm/highbd_quantize_neon.c"
                 "${AOM_ROOT}/aom_dsp/arm/highbd_sad_neon.c"
                 "${AOM_ROOT}/aom_dsp/arm/highbd_sadxd_neon.c"
@@ -435,6 +443,18 @@ function(setup_aom_dsp_targets)
                                     "aom_dsp_encoder"
                                     "AOM_DSP_ENCODER_INTRIN_NEON")
     endif()
+  endif()
+
+  if(HAVE_NEON_DOTPROD)
+    add_intrinsics_object_library("${AOM_NEON_DOTPROD_FLAG}" "neon_dotprod"
+                                  "aom_dsp_common"
+                                  "AOM_DSP_COMMON_INTRIN_NEON_DOTPROD")
+  endif()
+
+  if(HAVE_NEON_I8MM)
+    add_intrinsics_object_library("${AOM_NEON_I8MM_FLAG}" "neon_i8mm"
+                                  "aom_dsp_common"
+                                  "AOM_DSP_COMMON_INTRIN_NEON_I8MM")
   endif()
 
   target_sources(aom PRIVATE $<TARGET_OBJECTS:aom_dsp>)
