@@ -10,11 +10,13 @@
  * aomedia.org/license/patent-license/.
  */
 
+#include <assert.h>
 #include <math.h>
 #include <smmintrin.h>
 
 #include "aom_dsp/aom_dsp_common.h"
 #include "aom_dsp/flow_estimation/disflow.h"
+#include "aom_dsp/x86/synonyms.h"
 
 #include "config/aom_dsp_rtcd.h"
 
@@ -101,10 +103,8 @@ static INLINE void compute_flow_error(const uint8_t *ref, const uint8_t *frm,
   // We split the kernel into two vectors with kernel indices:
   // 0, 1, 0, 1, 0, 1, 0, 1, and
   // 2, 3, 2, 3, 2, 3, 2, 3
-  __m128i h_kernel_01 =
-      _mm_set1_epi32((h_kernel[0] & 0xFFFF) | (h_kernel[1] << 16));
-  __m128i h_kernel_23 =
-      _mm_set1_epi32((h_kernel[2] & 0xFFFF) | (h_kernel[3] << 16));
+  __m128i h_kernel_01 = xx_set2_epi16(h_kernel[0], h_kernel[1]);
+  __m128i h_kernel_23 = xx_set2_epi16(h_kernel[2], h_kernel[3]);
 
   __m128i round_const_h = _mm_set1_epi32(1 << (DISFLOW_INTERP_BITS - 6 - 1));
 
@@ -197,10 +197,8 @@ static INLINE void compute_flow_error(const uint8_t *ref, const uint8_t *frm,
   const int round_bits = DISFLOW_INTERP_BITS + 6 - DISFLOW_DERIV_SCALE_LOG2;
   __m128i round_const_v = _mm_set1_epi32(1 << (round_bits - 1));
 
-  __m128i v_kernel_01 =
-      _mm_set1_epi32((v_kernel[0] & 0xFFFF) | (v_kernel[1] << 16));
-  __m128i v_kernel_23 =
-      _mm_set1_epi32((v_kernel[2] & 0xFFFF) | (v_kernel[3] << 16));
+  __m128i v_kernel_01 = xx_set2_epi16(v_kernel[0], v_kernel[1]);
+  __m128i v_kernel_23 = xx_set2_epi16(v_kernel[2], v_kernel[3]);
 
   for (int i = 0; i < DISFLOW_PATCH_SIZE; ++i) {
     int16_t *tmp_row = &tmp[i * DISFLOW_PATCH_SIZE];
@@ -488,25 +486,22 @@ static INLINE void compute_hessian(const int16_t *dx, int dx_stride,
   _mm_storeu_pd(M + 2, _mm_cvtepi32_pd(_mm_srli_si128(result, 8)));
 }
 
-static INLINE void invert_2x2(const double *M, double *M_inv) {
-  double M_0 = M[0];
-  double M_3 = M[3];
-  double det = (M_0 * M_3) - (M[1] * M[2]);
-  if (det < 1e-5) {
-    // Handle singular matrix
-    // TODO(sarahparker) compare results using pseudo inverse instead
-    M_0 += 1e-10;
-    M_3 += 1e-10;
-    det = (M_0 * M_3) - (M[1] * M[2]);
+// Try to invert the matrix M
+// Returns a success indication:
+// true => M was successfully inverted into M_inv
+// false => M is degenerate (or too close to it), and could not be inverted
+static INLINE bool invert_2x2(const double *M, double *M_inv) {
+  double det = (M[0] * M[3]) - (M[1] * M[2]);
+  if (fabs(det) < 1e-5) {
+    return false;
   }
   const double det_inv = 1 / det;
 
-  // TODO(rachelbarker): Is using regularized values
-  // or original values better here?
-  M_inv[0] = M_3 * det_inv;
+  M_inv[0] = M[3] * det_inv;
   M_inv[1] = -M[1] * det_inv;
   M_inv[2] = -M[2] * det_inv;
-  M_inv[3] = M_0 * det_inv;
+  M_inv[3] = M[0] * det_inv;
+  return true;
 }
 
 void aom_compute_flow_at_point_sse4_1(const uint8_t *frm, const uint8_t *ref,
@@ -527,7 +522,11 @@ void aom_compute_flow_at_point_sse4_1(const uint8_t *frm, const uint8_t *ref,
   sobel_filter_y(frm_patch, stride, dy, DISFLOW_PATCH_SIZE);
 
   compute_hessian(dx, DISFLOW_PATCH_SIZE, dy, DISFLOW_PATCH_SIZE, M);
-  invert_2x2(M, M_inv);
+  bool valid = invert_2x2(M, M_inv);
+  if (!valid) {
+    // Unable to refine this point at this level
+    return;
+  }
 
   for (int itr = 0; itr < DISFLOW_MAX_ITR; itr++) {
     compute_flow_error(ref, frm, width, height, stride, x, y, *u, *v, dt);

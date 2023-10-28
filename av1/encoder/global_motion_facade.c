@@ -103,6 +103,7 @@ static AOM_INLINE void compute_global_motion_for_ref_frame(
   TransformationType model;
   int bit_depth = cpi->common.seq_params->bit_depth;
   GlobalMotionMethod global_motion_method = cpi->oxcf.global_motion_method;
+  int num_refinements = cpi->sf.gm_sf.num_refinement_steps;
 
   for (model = ROTZOOM; model < GLOBAL_TRANS_TYPES_ENC; ++model) {
     int64_t best_warp_error = INT64_MAX;
@@ -151,7 +152,7 @@ static AOM_INLINE void compute_global_motion_for_ref_frame(
             ref_buf[frame]->y_buffer, ref_buf[frame]->y_crop_width,
             ref_buf[frame]->y_crop_height, ref_buf[frame]->y_stride,
             cpi->source->y_buffer, src_width, src_height, src_stride,
-            GM_REFINEMENT_COUNT, best_warp_error, segment_map, segment_map_w,
+            num_refinements, best_warp_error, segment_map, segment_map_w,
             erroradv_threshold);
 
         // av1_refine_integerized_param() can return a TRANSLATION type model
@@ -236,11 +237,8 @@ static AOM_INLINE void compute_global_motion_for_references(
                                         segment_map_h);
     // If global motion w.r.t. current ref frame is
     // INVALID/TRANSLATION/IDENTITY, skip the evaluation of global motion w.r.t
-    // the remaining ref frames in that direction. The below exit is disabled
-    // when ref frame distance w.r.t. current frame is zero. E.g.:
-    // source_alt_ref_frame w.r.t. ARF frames.
+    // the remaining ref frames in that direction.
     if (cpi->sf.gm_sf.prune_ref_frame_for_gm_search &&
-        reference_frame[frame].distance != 0 &&
         cm->global_motion[ref_frame].wmtype != ROTZOOM)
       break;
   }
@@ -344,7 +342,13 @@ static AOM_INLINE void update_valid_ref_frames_for_gm(
       // Populate past and future ref frames.
       // reference_frames[0][] indicates past direction and
       // reference_frames[1][] indicates future direction.
-      if (relative_frame_dist <= 0) {
+      if (relative_frame_dist == 0) {
+        // Skip global motion estimation for frames at the same nominal instant.
+        // This will generally be either a "real" frame coded against a
+        // temporal filtered version, or a higher spatial layer coded against
+        // a lower spatial layer. In either case, the optimal motion model will
+        // be IDENTITY, so we don't need to search explicitly.
+      } else if (relative_frame_dist < 0) {
         reference_frames[0][*num_past_ref_frames].distance =
             abs(relative_frame_dist);
         reference_frames[0][*num_past_ref_frames].frame = frame;

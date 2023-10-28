@@ -345,26 +345,26 @@ static const struct av1_extracfg default_extra_cfg = {
       SEQ_LEVEL_MAX, SEQ_LEVEL_MAX, SEQ_LEVEL_MAX, SEQ_LEVEL_MAX, SEQ_LEVEL_MAX,
       SEQ_LEVEL_MAX, SEQ_LEVEL_MAX, SEQ_LEVEL_MAX, SEQ_LEVEL_MAX, SEQ_LEVEL_MAX,
       SEQ_LEVEL_MAX, SEQ_LEVEL_MAX,
-  },                                   // target_seq_level_idx
-  0,                                   // tier_mask
-  0,                                   // min_cr
-  COST_UPD_OFF,                        // coeff_cost_upd_freq
-  COST_UPD_OFF,                        // mode_cost_upd_freq
-  COST_UPD_OFF,                        // mv_cost_upd_freq
-  COST_UPD_OFF,                        // dv_cost_upd_freq
-  0,                                   // ext_tile_debug
-  0,                                   // sb_multipass_unit_test
-  -1,                                  // passes
-  -1,                                  // fwd_kf_dist
-  LOOPFILTER_ALL,                      // loopfilter_control
-  0,                                   // skip_postproc_filtering
-  NULL,                                // two_pass_output
-  NULL,                                // second_pass_log
-  0,                                   // auto_intra_tools_off
-  0,                                   // strict_level_conformance
-  -1,                                  // kf_max_pyr_height
-  0,                                   // sb_qp_sweep
-  GLOBAL_MOTION_METHOD_FEATURE_MATCH,  // global_motion_method
+  },                             // target_seq_level_idx
+  0,                             // tier_mask
+  0,                             // min_cr
+  COST_UPD_OFF,                  // coeff_cost_upd_freq
+  COST_UPD_OFF,                  // mode_cost_upd_freq
+  COST_UPD_OFF,                  // mv_cost_upd_freq
+  COST_UPD_OFF,                  // dv_cost_upd_freq
+  0,                             // ext_tile_debug
+  0,                             // sb_multipass_unit_test
+  -1,                            // passes
+  -1,                            // fwd_kf_dist
+  LOOPFILTER_ALL,                // loopfilter_control
+  0,                             // skip_postproc_filtering
+  NULL,                          // two_pass_output
+  NULL,                          // second_pass_log
+  0,                             // auto_intra_tools_off
+  0,                             // strict_level_conformance
+  -1,                            // kf_max_pyr_height
+  0,                             // sb_qp_sweep
+  GLOBAL_MOTION_METHOD_DISFLOW,  // global_motion_method
 };
 #else
 static const struct av1_extracfg default_extra_cfg = {
@@ -497,26 +497,26 @@ static const struct av1_extracfg default_extra_cfg = {
       SEQ_LEVEL_MAX, SEQ_LEVEL_MAX, SEQ_LEVEL_MAX, SEQ_LEVEL_MAX, SEQ_LEVEL_MAX,
       SEQ_LEVEL_MAX, SEQ_LEVEL_MAX, SEQ_LEVEL_MAX, SEQ_LEVEL_MAX, SEQ_LEVEL_MAX,
       SEQ_LEVEL_MAX, SEQ_LEVEL_MAX,
-  },                                   // target_seq_level_idx
-  0,                                   // tier_mask
-  0,                                   // min_cr
-  COST_UPD_SB,                         // coeff_cost_upd_freq
-  COST_UPD_SB,                         // mode_cost_upd_freq
-  COST_UPD_SB,                         // mv_cost_upd_freq
-  COST_UPD_SB,                         // dv_cost_upd_freq
-  0,                                   // ext_tile_debug
-  0,                                   // sb_multipass_unit_test
-  -1,                                  // passes
-  -1,                                  // fwd_kf_dist
-  LOOPFILTER_ALL,                      // loopfilter_control
-  0,                                   // skip_postproc_filtering
-  NULL,                                // two_pass_output
-  NULL,                                // second_pass_log
-  0,                                   // auto_intra_tools_off
-  0,                                   // strict_level_conformance
-  -1,                                  // kf_max_pyr_height
-  0,                                   // sb_qp_sweep
-  GLOBAL_MOTION_METHOD_FEATURE_MATCH,  // global_motion_method
+  },                             // target_seq_level_idx
+  0,                             // tier_mask
+  0,                             // min_cr
+  COST_UPD_SB,                   // coeff_cost_upd_freq
+  COST_UPD_SB,                   // mode_cost_upd_freq
+  COST_UPD_SB,                   // mv_cost_upd_freq
+  COST_UPD_SB,                   // dv_cost_upd_freq
+  0,                             // ext_tile_debug
+  0,                             // sb_multipass_unit_test
+  -1,                            // passes
+  -1,                            // fwd_kf_dist
+  LOOPFILTER_ALL,                // loopfilter_control
+  0,                             // skip_postproc_filtering
+  NULL,                          // two_pass_output
+  NULL,                          // second_pass_log
+  0,                             // auto_intra_tools_off
+  0,                             // strict_level_conformance
+  -1,                            // kf_max_pyr_height
+  0,                             // sb_qp_sweep
+  GLOBAL_MOTION_METHOD_DISFLOW,  // global_motion_method
 };
 #endif
 
@@ -715,7 +715,7 @@ static aom_codec_err_t validate_config(aom_codec_alg_priv_t *ctx,
   RANGE_CHECK_HI(extra_cfg, enable_auto_alt_ref, 1);
   RANGE_CHECK_HI(extra_cfg, enable_auto_bwd_ref, 2);
   RANGE_CHECK(extra_cfg, cpu_used, 0,
-              (cfg->g_usage == AOM_USAGE_REALTIME) ? 10 : 9);
+              (cfg->g_usage == AOM_USAGE_REALTIME) ? 11 : 9);
   RANGE_CHECK_HI(extra_cfg, noise_sensitivity, 6);
   RANGE_CHECK(extra_cfg, superblock_size, AOM_SUPERBLOCK_SIZE_64X64,
               AOM_SUPERBLOCK_SIZE_DYNAMIC);
@@ -831,7 +831,7 @@ static aom_codec_err_t validate_config(aom_codec_alg_priv_t *ctx,
   }
 #endif
 
-  RANGE_CHECK(extra_cfg, tuning, AOM_TUNE_PSNR, AOM_TUNE_BUTTERAUGLI);
+  RANGE_CHECK(extra_cfg, tuning, AOM_TUNE_PSNR, AOM_TUNE_VMAF_SALIENCY_MAP);
 
   RANGE_CHECK(extra_cfg, dist_metric, AOM_DIST_METRIC_PSNR,
               AOM_DIST_METRIC_QM_PSNR);

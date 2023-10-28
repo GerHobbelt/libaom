@@ -1000,6 +1000,7 @@ static void set_good_speed_features_framesize_independent(
     sf->fp_sf.skip_motion_search_threshold = 25;
 
     sf->gm_sf.disable_gm_search_based_on_stats = 1;
+    sf->gm_sf.num_refinement_steps = 2;
 
     sf->part_sf.reuse_best_prediction_for_part_ab =
         !frame_is_intra_only(&cpi->common);
@@ -1056,8 +1057,8 @@ static void set_good_speed_features_framesize_independent(
   if (speed >= 3) {
     sf->hl_sf.high_precision_mv_usage = CURRENT_Q;
 
-    sf->gm_sf.gm_search_type = GM_DISABLE_SEARCH;
     sf->gm_sf.prune_zero_mv_with_sse = 1;
+    sf->gm_sf.num_refinement_steps = 0;
 
     sf->part_sf.less_rectangular_check_level = 2;
     sf->part_sf.simple_motion_search_prune_agg =
@@ -1083,7 +1084,6 @@ static void set_good_speed_features_framesize_independent(
     sf->inter_sf.prune_inter_modes_based_on_tpl = boosted ? 0 : 1;
     sf->inter_sf.prune_comp_search_by_single_result = boosted ? 4 : 2;
     sf->inter_sf.selective_ref_frame = 5;
-    sf->inter_sf.skip_repeated_ref_mv = 1;
     sf->inter_sf.reuse_compound_type_decision = 1;
     sf->inter_sf.txfm_rd_gate_level =
         boosted ? 0 : (is_boosted_arf2_bwd_type ? 1 : 2);
@@ -1130,9 +1130,9 @@ static void set_good_speed_features_framesize_independent(
   }
 
   if (speed >= 4) {
-    sf->gm_sf.prune_zero_mv_with_sse = 2;
-
     sf->mv_sf.subpel_search_method = SUBPEL_TREE_PRUNED_MORE;
+
+    sf->gm_sf.prune_zero_mv_with_sse = 2;
 
     sf->part_sf.simple_motion_search_prune_agg =
         allow_screen_content_tools ? SIMPLE_AGG_LVL0 : SIMPLE_AGG_LVL2;
@@ -1188,6 +1188,8 @@ static void set_good_speed_features_framesize_independent(
 
     sf->fp_sf.reduce_mv_step_param = 4;
 
+    sf->gm_sf.gm_search_type = GM_DISABLE_SEARCH;
+
     sf->part_sf.simple_motion_search_prune_agg =
         allow_screen_content_tools ? SIMPLE_AGG_LVL0 : SIMPLE_AGG_LVL3;
     sf->part_sf.ext_partition_eval_thresh =
@@ -1195,6 +1197,8 @@ static void set_good_speed_features_framesize_independent(
     sf->part_sf.prune_sub_8x8_partition_level =
         (allow_screen_content_tools || frame_is_intra_only(&cpi->common)) ? 0
                                                                           : 2;
+
+    sf->mv_sf.warp_search_method = WARP_SEARCH_DIAMOND;
 
     sf->inter_sf.prune_inter_modes_if_skippable = 1;
     sf->inter_sf.txfm_rd_gate_level = boosted ? 0 : 4;
@@ -1459,6 +1463,7 @@ static void set_rt_speed_feature_framesize_dependent(const AV1_COMP *const cpi,
     if (speed >= 7) {
       sf->rt_sf.reduce_mv_pel_precision_highmotion = 1;
       sf->mv_sf.use_bsize_dependent_search_method = 0;
+      sf->rt_sf.skip_cdef_sb = 1;
     }
     if (speed >= 8) {
       sf->rt_sf.nonrd_check_partition_merge_mode = 3;
@@ -1486,8 +1491,14 @@ static void set_rt_speed_feature_framesize_dependent(const AV1_COMP *const cpi,
       sf->rt_sf.part_early_exit_zeromv = 1;
       sf->rt_sf.nonrd_aggressive_skip = 1;
     }
+    if (speed >= 11) {
+      sf->rt_sf.skip_lf_screen = 2;
+      sf->rt_sf.skip_cdef_sb = 2;
+      sf->rt_sf.part_early_exit_zeromv = 2;
+      sf->rt_sf.prune_palette_nonrd = 1;
+      sf->rt_sf.set_zeromv_skip_based_on_source_sad = 2;
+    }
     sf->rt_sf.use_nonrd_altref_frame = 0;
-    sf->rt_sf.skip_cdef_sb = 1;
     sf->rt_sf.use_rtc_tf = 0;
     sf->rt_sf.use_comp_ref_nonrd = 0;
     sf->rt_sf.source_metrics_sb_nonrd = 1;
@@ -1846,6 +1857,7 @@ static AOM_INLINE void init_gm_sf(GLOBAL_MOTION_SPEED_FEATURES *gm_sf) {
   gm_sf->prune_ref_frame_for_gm_search = 0;
   gm_sf->prune_zero_mv_with_sse = 0;
   gm_sf->disable_gm_search_based_on_stats = 0;
+  gm_sf->num_refinement_steps = GM_MAX_REFINEMENT_STEPS;
 }
 
 static AOM_INLINE void init_part_sf(PARTITION_SPEED_FEATURES *part_sf) {
@@ -1912,6 +1924,8 @@ static AOM_INLINE void init_mv_sf(MV_SPEED_FEATURES *mv_sf) {
   mv_sf->disable_extensive_joint_motion_search = 0;
   mv_sf->disable_second_mv = 0;
   mv_sf->skip_fullpel_search_using_startmv = 0;
+  mv_sf->warp_search_method = WARP_SEARCH_SQUARE;
+  mv_sf->warp_search_iters = 8;
 }
 
 static AOM_INLINE void init_inter_sf(INTER_MODE_SPEED_FEATURES *inter_sf) {
@@ -2124,6 +2138,7 @@ static AOM_INLINE void init_rt_sf(REAL_TIME_SPEED_FEATURES *rt_sf) {
   rt_sf->gf_refresh_based_on_qp = 0;
   rt_sf->use_rtc_tf = 0;
   rt_sf->prune_idtx_nonrd = 0;
+  rt_sf->prune_palette_nonrd = 0;
   rt_sf->part_early_exit_zeromv = 0;
   rt_sf->sse_early_term_inter_search = EARLY_TERM_DISABLED;
   rt_sf->skip_lf_screen = 0;

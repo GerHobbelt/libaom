@@ -2313,9 +2313,13 @@ static void pick_sb_modes_nonrd(AV1_COMP *const cpi, TileDataEnc *tile_data,
         get_mi_grid_idx(&cm->mi_params, mi_row_sb, mi_col_sb);
     // Do not skip if intra or new mv is picked, or color sensitivity is set.
     // Never skip on slide/scene change.
-    mi_sb[0]->cdef_strength =
-        mi_sb[0]->cdef_strength && allow_cdef_skipping &&
-        !(mbmi->mode < INTRA_MODES || mbmi->mode == NEWMV);
+    if (cpi->sf.rt_sf.skip_cdef_sb >= 2) {
+      mi_sb[0]->cdef_strength = mi_sb[0]->cdef_strength && allow_cdef_skipping;
+    } else {
+      mi_sb[0]->cdef_strength =
+          mi_sb[0]->cdef_strength && allow_cdef_skipping &&
+          !(mbmi->mode < INTRA_MODES || mbmi->mode == NEWMV);
+    }
     // Store in the pickmode context.
     ctx->mic.cdef_strength = mi_sb[0]->cdef_strength;
   }

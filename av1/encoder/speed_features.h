@@ -541,6 +541,9 @@ typedef struct GLOBAL_MOTION_SPEED_FEATURES {
   // Disable global motion estimation based on stats of previous frames in the
   // GF group
   int disable_gm_search_based_on_stats;
+
+  // Number of refinement steps to apply after initial model generation
+  int num_refinement_steps;
 } GLOBAL_MOTION_SPEED_FEATURES;
 
 typedef struct PARTITION_SPEED_FEATURES {
@@ -819,6 +822,13 @@ typedef struct MV_SPEED_FEATURES {
 
   // Skips full pixel search based on start mv of prior ref_mv_idx.
   int skip_fullpel_search_using_startmv;
+
+  // Method to use for refining WARPED_CAUSAL motion vectors
+  // TODO(rachelbarker): Can this be unified with OBMC in some way?
+  WARP_SEARCH_METHOD warp_search_method;
+
+  // Maximum number of iterations in WARPED_CAUSAL refinement search
+  int warp_search_iters;
 } MV_SPEED_FEATURES;
 
 typedef struct INTER_MODE_SPEED_FEATURES {
@@ -1523,9 +1533,13 @@ typedef struct REAL_TIME_SPEED_FEATURES {
   // Skips mode checks more aggressively in nonRD mode
   int nonrd_aggressive_skip;
 
-  // Skip cdef on 64x64 blocks when NEWMV or INTRA is not picked or color
-  // sensitivity is off. When color sensitivity is on for a superblock, all
-  // 64x64 blocks within will not skip.
+  // Skip cdef on 64x64 blocks/
+  // 0: disabled
+  // 1: skip when NEWMV or INTRA is not picked or color sensitivity is off.
+  // When color sensitivity is on for a superblock, all 64x64 blocks within
+  // will not skip.
+  // 2: more aggressive mode where skip is done for all frames where
+  // rc->high_source_sad = 0 (non slide-changes), and color sensitivity off.
   int skip_cdef_sb;
 
   // Forces larger partition blocks in variance based partitioning for intra
@@ -1594,8 +1608,15 @@ typedef struct REAL_TIME_SPEED_FEATURES {
   // already set.
   int prune_idtx_nonrd;
 
+  // Prune the use of paletter mode in nonrd pickmode.
+  int prune_palette_nonrd;
+
   // Skip loopfilter, for static content after slide change
   // or key frame, once quality has ramped up.
+  // 0: disabled
+  // 1: skip only after quality is ramped up.
+  // 2: aggrssive mode, where skip is done for all frames that
+  // where rc->high_source_sad = 0 (no slide-changes).
   int skip_lf_screen;
 
   // For nonrd: early exit out of variance partition that sets the
