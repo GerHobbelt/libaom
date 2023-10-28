@@ -319,7 +319,8 @@ list(APPEND AOM_AV1_ENCODER_INTRIN_SSE2
             "${AOM_ROOT}/av1/encoder/x86/temporal_filter_sse2.c"
             "${AOM_ROOT}/av1/encoder/x86/wedge_utils_sse2.c")
 
-list(APPEND AOM_AV1_ENCODER_INTRIN_SSE3 "${AOM_ROOT}/av1/encoder/x86/ml_sse3.c")
+list(APPEND AOM_AV1_ENCODER_INTRIN_SSE3 "${AOM_ROOT}/av1/encoder/x86/ml_sse3.c"
+            "${AOM_ROOT}/av1/encoder/x86/ml_sse3.h")
 
 list(APPEND AOM_AV1_ENCODER_INTRIN_SSSE3
             "${AOM_ROOT}/av1/encoder/x86/reconinter_enc_ssse3.c")
@@ -348,13 +349,14 @@ list(APPEND AOM_AV1_ENCODER_INTRIN_AVX2
             "${AOM_ROOT}/av1/encoder/x86/av1_k_means_avx2.c"
             "${AOM_ROOT}/av1/encoder/x86/temporal_filter_avx2.c"
             "${AOM_ROOT}/av1/encoder/x86/pickrst_avx2.c"
-            "${AOM_ROOT}/av1/encoder/x86/cnn_avx2.c")
+            "${AOM_ROOT}/av1/encoder/x86/cnn_avx2.c"
+            "${AOM_ROOT}/av1/encoder/x86/ml_avx2.c")
 
 list(APPEND AOM_AV1_ENCODER_INTRIN_NEON
             "${AOM_ROOT}/av1/encoder/arm/neon/quantize_neon.c"
             "${AOM_ROOT}/av1/encoder/arm/neon/av1_highbd_quantize_neon.c"
             "${AOM_ROOT}/av1/encoder/arm/neon/ml_neon.c"
-            "${AOM_ROOT}/av1/encoder/arm/neon/picksrt_neon.c"
+            "${AOM_ROOT}/av1/encoder/arm/neon/pickrst_neon.c"
             "${AOM_ROOT}/av1/encoder/arm/neon/rdopt_neon.c"
             "${AOM_ROOT}/av1/encoder/arm/neon/av1_error_neon.c"
             "${AOM_ROOT}/av1/encoder/arm/neon/encodetxb_neon.c"
