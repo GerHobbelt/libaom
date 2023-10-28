@@ -219,7 +219,7 @@ include_directories(${AOM_ROOT} ${AOM_CONFIG_DIR} ${AOM_ROOT}/apps
 
 # Targets
 add_library(aom_version ${AOM_VERSION_SOURCES})
-add_dummy_source_file_to_target(aom_version c)
+add_no_op_source_file_to_target(aom_version c)
 add_custom_command(OUTPUT "${AOM_CONFIG_DIR}/config/aom_version.h"
                    COMMAND ${CMAKE_COMMAND} ARGS
                            -DAOM_CONFIG_DIR=${AOM_CONFIG_DIR}
@@ -345,13 +345,16 @@ foreach(aom_lib ${AOM_LIB_TARGETS})
   endif()
 endforeach()
 
-# Generate C/C++ stub files containing the function usage_exit(). Users of the
+# Generate C/C++ files containing the function usage_exit(). Users of the
 # aom_common_app_util library must define this function. This is a convenience
 # to allow omission of the function from applications that might want to use
 # other pieces of the util support without defining usage_exit().
-file(WRITE "${AOM_GEN_SRC_DIR}/usage_exit.c" "void usage_exit(void) {}")
+file(WRITE "${AOM_GEN_SRC_DIR}/usage_exit.c"
+     "#include <stdlib.h>\n\n#include \"common/tools_common.h\"\n\n"
+     "void usage_exit(void) { exit(EXIT_FAILURE); }\n")
 file(WRITE "${AOM_GEN_SRC_DIR}/usage_exit.cc"
-     "extern \"C\" void usage_exit(void) {}")
+     "#include <stdlib.h>\n\n#include \"common/tools_common.h\"\n\n"
+     "extern \"C\" void usage_exit(void) { exit(EXIT_FAILURE); }\n")
 
 #
 # Application and application support targets.
@@ -778,7 +781,7 @@ if(XCODE)
     # here, it really is the Xcode generator's fault, or just a deficiency in
     # Xcode itself.
     foreach(aom_app ${AOM_APP_TARGETS})
-      add_dummy_source_file_to_target("${aom_app}" "cc")
+      add_no_op_source_file_to_target("${aom_app}" "cc")
     endforeach()
   endif()
 endif()
