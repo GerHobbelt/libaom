@@ -233,6 +233,8 @@ if(AOM_TARGET_SYSTEM STREQUAL "Windows")
   # Prevent windows.h from defining the min and max macros. This allows us to
   # use std::min and std::max.
   add_compiler_flag_if_supported("-DNOMINMAX")
+  # Quiet warnings related to fopen, printf, etc.
+  add_compiler_flag_if_supported("-D_CRT_SECURE_NO_WARNINGS")
 endif()
 
 #
@@ -248,7 +250,7 @@ aom_get_inline("INLINE")
 set(HAVE_PTHREAD_H ${CMAKE_USE_PTHREADS_INIT})
 aom_check_source_compiles("unistd_check" "#include <unistd.h>" HAVE_UNISTD_H)
 
-if(NOT MSVC)
+if(NOT WIN32)
   aom_push_var(CMAKE_REQUIRED_LIBRARIES "m")
   aom_check_c_compiles("fenv_check" "#define _GNU_SOURCE
                         #include <fenv.h>
@@ -300,7 +302,11 @@ if(MSVC)
   endif()
 else()
   require_c_flag("-std=c99" YES)
-  require_cxx_flag_nomsvc("-std=c++11" YES)
+  if(WIN32 AND NOT MINGW)
+    require_cxx_flag_nomsvc("-std=c++14" YES)
+  else()
+    require_cxx_flag_nomsvc("-std=c++11" YES)
+  endif()
   add_compiler_flag_if_supported("-Wall")
   add_compiler_flag_if_supported("-Wdisabled-optimization")
   add_compiler_flag_if_supported("-Wextra")

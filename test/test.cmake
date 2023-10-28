@@ -70,6 +70,7 @@ list(APPEND AOM_UNIT_TEST_ENCODER_SOURCES
             "${AOM_ROOT}/test/datarate_test.cc"
             "${AOM_ROOT}/test/datarate_test.h"
             "${AOM_ROOT}/test/deltaq_mode_test.cc"
+            "${AOM_ROOT}/test/dropframe_encode_test.cc"
             "${AOM_ROOT}/test/svc_datarate_test.cc"
             "${AOM_ROOT}/test/encode_api_test.cc"
             "${AOM_ROOT}/test/encode_small_width_height_test.cc"
@@ -126,6 +127,7 @@ if(CONFIG_REALTIME_ONLY)
                    "${AOM_ROOT}/test/cpu_speed_test.cc"
                    "${AOM_ROOT}/test/cpu_used_firstpass_test.cc"
                    "${AOM_ROOT}/test/deltaq_mode_test.cc"
+                   "${AOM_ROOT}/test/dropframe_encode_test.cc"
                    "${AOM_ROOT}/test/end_to_end_psnr_test.cc"
                    "${AOM_ROOT}/test/force_key_frame_test.cc"
                    "${AOM_ROOT}/test/gf_pyr_height_test.cc"
@@ -476,19 +478,16 @@ function(setup_aom_test_targets)
       target_sources(test_libaom PRIVATE ${AOM_ENCODE_PERF_TEST_SOURCES})
     endif()
 
-    if(NOT BUILD_SHARED_LIBS)
-      add_executable(test_intra_pred_speed
-                     ${AOM_TEST_INTRA_PRED_SPEED_SOURCES}
-                     $<TARGET_OBJECTS:aom_common_app_util>)
-      set_property(TARGET test_intra_pred_speed
-                   PROPERTY FOLDER ${AOM_IDE_TEST_FOLDER})
-      target_link_libraries(test_intra_pred_speed ${AOM_LIB_LINK_TYPE} aom
-                            aom_gtest)
-      list(APPEND AOM_APP_TARGETS test_intra_pred_speed)
-    endif()
+    add_executable(test_intra_pred_speed ${AOM_TEST_INTRA_PRED_SPEED_SOURCES}
+                                         $<TARGET_OBJECTS:aom_common_app_util>)
+    set_property(TARGET test_intra_pred_speed
+                 PROPERTY FOLDER ${AOM_IDE_TEST_FOLDER})
+    target_link_libraries(test_intra_pred_speed ${AOM_LIB_LINK_TYPE} ${AOM_LIB}
+                          aom_gtest)
+    list(APPEND AOM_APP_TARGETS test_intra_pred_speed)
   endif()
 
-  target_link_libraries(test_libaom ${AOM_LIB_LINK_TYPE} aom aom_gtest)
+  target_link_libraries(test_libaom ${AOM_LIB_LINK_TYPE} ${AOM_LIB} aom_gtest)
 
   if(CONFIG_LIBYUV)
     target_sources(test_libaom PRIVATE $<TARGET_OBJECTS:yuv>)
