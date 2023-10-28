@@ -2983,12 +2983,6 @@ static aom_codec_err_t encoder_encode(aom_codec_alg_priv_t *ctx,
   if (res == AOM_CODEC_OK) {
     AV1_COMP *cpi = ppi->cpi;
 
-    const int num_layers =
-        cpi->svc.number_spatial_layers * cpi->svc.number_temporal_layers;
-    if (num_layers > 1 && !av1_alloc_layer_context(cpi, num_layers)) {
-      return AOM_CODEC_MEM_ERROR;
-    }
-
     // Set up internal flags
     if (ctx->base.init_flags & AOM_CODEC_USE_PSNR) ppi->b_calculate_psnr = 1;
 
@@ -3021,7 +3015,7 @@ static aom_codec_err_t encoder_encode(aom_codec_alg_priv_t *ctx,
         AV1EncoderConfig *oxcf = &cpi->oxcf;
         const BLOCK_SIZE sb_size = av1_select_sb_size(
             oxcf, oxcf->frm_dim_cfg.width, oxcf->frm_dim_cfg.height,
-            cpi->svc.number_spatial_layers);
+            ppi->number_spatial_layers);
         oxcf->border_in_pixels =
             av1_get_enc_border_size(av1_is_resize_needed(oxcf),
                                     oxcf->kf_cfg.key_freq_max == 0, sb_size);
@@ -3538,6 +3532,7 @@ static aom_codec_err_t ctrl_set_svc_params(aom_codec_alg_priv_t *ctx,
         lc->framerate_factor = params->framerate_factor[tl];
         if (tl == ppi->number_temporal_layers - 1)
           target_bandwidth += lc->layer_target_bitrate;
+        lc->speed = params->speed_per_layer[layer];
       }
     }
     if (cm->current_frame.frame_number == 0) {
