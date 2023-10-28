@@ -1656,16 +1656,16 @@ static int64_t skip_mode_rd(RD_STATS *rd_stats, const AV1_COMP *const cpi,
     // Call av1_enc_build_inter_predictor() for one plane at a time.
     av1_enc_build_inter_predictor(cm, xd, mi_row, mi_col, orig_dst, bsize,
                                   plane, plane);
-    const struct macroblock_plane *const p = &x->plane[plane];
     const struct macroblockd_plane *const pd = &xd->plane[plane];
     const BLOCK_SIZE plane_bsize =
         get_plane_block_size(bsize, pd->subsampling_x, pd->subsampling_y);
-    const int bw = block_size_wide[plane_bsize];
-    const int bh = block_size_high[plane_bsize];
 
     av1_subtract_plane(x, plane_bsize, plane);
-    int64_t sse = aom_sum_squares_2d_i16(p->src_diff, bw, bw, bh) << 4;
-    sse >>= ((cpi->frame_info.bit_depth - 8) * 2);
+
+    int64_t sse =
+        av1_pixel_diff_dist(x, plane, 0, 0, plane_bsize, plane_bsize, NULL);
+    if (is_cur_buf_hbd(xd)) sse = ROUND_POWER_OF_TWO(sse, (xd->bd - 8) * 2);
+    sse <<= 4;
     total_sse += sse;
     // When current rd cost is more than the best rd, skip evaluation of
     // remaining planes.
@@ -3242,9 +3242,11 @@ static int64_t rd_pick_intrabc_mode_sb(const AV1_COMP *cpi, MACROBLOCK *x,
     const int step_param = cpi->mv_search_params.mv_step_param;
     IntraBCHashInfo *intrabc_hash_info = &x->intrabc_hash_info;
     int_mv best_mv, best_hash_mv;
+    FULLPEL_MV_STATS best_mv_stats;
 
-    int bestsme = av1_full_pixel_search(start_mv, &fullms_params, step_param,
-                                        NULL, &best_mv.as_fullmv, NULL);
+    int bestsme =
+        av1_full_pixel_search(start_mv, &fullms_params, step_param, NULL,
+                              &best_mv.as_fullmv, &best_mv_stats, NULL);
     const int hashsme = av1_intrabc_hash_search(
         cpi, xd, &fullms_params, intrabc_hash_info, &best_hash_mv.as_fullmv);
     if (hashsme < bestsme) {

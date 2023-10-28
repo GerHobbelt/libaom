@@ -1411,6 +1411,7 @@ AV1_COMP *av1_create_compressor(AV1_PRIMARY *ppi, const AV1EncoderConfig *oxcf,
 
   cm->current_frame.frame_number = 0;
   cpi->rc.frame_number_encoded = 0;
+  cpi->rc.prev_frame_is_dropped = 0;
   cm->current_frame_id = -1;
   cpi->tile_data = NULL;
   cpi->last_show_frame_buf = NULL;
@@ -2516,7 +2517,8 @@ static int encode_without_recode(AV1_COMP *cpi) {
   av1_set_size_dependent_vars(cpi, &q, &bottom_index, &top_index);
   av1_set_mv_search_params(cpi);
 
-  if (cm->current_frame.frame_number == 0 && cpi->ppi->use_svc &&
+  if (cm->current_frame.frame_number == 0 &&
+      (cpi->ppi->use_svc || cpi->oxcf.rc_cfg.drop_frames_water_mark > 0) &&
       cpi->svc.temporal_layer_id == 0) {
     const SequenceHeader *seq_params = cm->seq_params;
     if (aom_alloc_frame_buffer(
@@ -3569,10 +3571,6 @@ static int encode_frame_to_data_rate(AV1_COMP *cpi, size_t *size,
 #if CONFIG_COLLECT_COMPONENT_TIMING
   start_timing(cpi, encode_frame_to_data_rate_time);
 #endif
-
-  if (frame_is_intra_only(cm)) {
-    av1_set_screen_content_options(cpi, features);
-  }
 
 #if !CONFIG_REALTIME_ONLY
   calculate_frame_avg_haar_energy(cpi);
