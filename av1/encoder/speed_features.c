@@ -1537,6 +1537,12 @@ static void set_rt_speed_feature_framesize_dependent(const AV1_COMP *const cpi,
       sf->rt_sf.estimate_motion_for_var_based_partition = 1;
     if (speed >= 9) sf->rt_sf.estimate_motion_for_var_based_partition = 0;
   }
+  if (is_lossless_requested(&cpi->oxcf.rc_cfg)) {
+    sf->rt_sf.use_rtc_tf = 0;
+    // TODO(aomedia:3412): The setting accurate_bit_estimate = 0
+    // can be removed once it's fixed for lossless mode.
+    sf->hl_sf.accurate_bit_estimate = 0;
+  }
 }
 
 // TODO(kyslov): now this is very similar to
@@ -2511,6 +2517,17 @@ void av1_set_speed_features_qindex_dependent(AV1_COMP *cpi, int speed) {
     if (cm->quant_params.base_qindex <= 200) {
       if (!boosted && !is_arf2_bwd_type)
         sf->inter_sf.reuse_mask_search_results = 1;
+    }
+  }
+
+  if (speed == 5) {
+    if (!(frame_is_intra_only(&cpi->common) ||
+          cm->features.allow_screen_content_tools)) {
+      const int qindex[2] = { 256, 128 };
+      // Set the sf value as 3 for low resolution and
+      // for higher resolutions with low quantizers.
+      if (cm->quant_params.base_qindex < qindex[is_480p_or_larger])
+        sf->tx_sf.tx_type_search.winner_mode_tx_type_pruning = 3;
     }
   }
 

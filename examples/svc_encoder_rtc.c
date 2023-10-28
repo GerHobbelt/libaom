@@ -12,20 +12,26 @@
 //  encoding scheme for RTC video applications.
 
 #include <assert.h>
+#include <limits.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "config/aom_config.h"
+
+#if CONFIG_AV1_DECODER
+#include "aom/aom_decoder.h"
+#endif
 #include "aom/aom_encoder.h"
 #include "aom/aomcx.h"
 #include "av1/common/enums.h"
-#include "av1/encoder/encoder.h"
 #include "common/args.h"
 #include "common/tools_common.h"
 #include "common/video_writer.h"
 #include "examples/encoder_util.h"
 #include "aom_ports/aom_timer.h"
+#include "aom_ports/bitops.h"
 
 #define OPTION_BUFFER_SIZE 1024
 
@@ -252,10 +258,10 @@ static aom_codec_err_t parse_layer_options_from_string(
       (option1 == NULL && type == SCALE_FACTOR))
     return AOM_CODEC_INVALID_PARAM;
 
-  input_string = malloc(strlen(input));
-  if (!input_string) die("Failed to allocate input string.");
-  memcpy(input_string, input, strlen(input));
+  const size_t input_length = strlen(input);
+  input_string = malloc(input_length + 1);
   if (input_string == NULL) return AOM_CODEC_MEM_ERROR;
+  memcpy(input_string, input, input_length + 1);
   token = strtok(input_string, delim);  // NOLINT
   for (i = 0; i < num_layers; ++i) {
     if (token != NULL) {
@@ -263,11 +269,9 @@ static aom_codec_err_t parse_layer_options_from_string(
       if (res != AOM_CODEC_OK) break;
       token = strtok(NULL, delim);  // NOLINT
     } else {
+      res = AOM_CODEC_INVALID_PARAM;
       break;
     }
-  }
-  if (res == AOM_CODEC_OK && i != num_layers) {
-    res = AOM_CODEC_INVALID_PARAM;
   }
   free(input_string);
   return res;
@@ -330,9 +334,13 @@ static void parse_command_line(int argc, const char **argv_,
       enc_cfg->kf_min_dist = arg_parse_uint(&arg);
       enc_cfg->kf_max_dist = enc_cfg->kf_min_dist;
     } else if (arg_match(&arg, &scale_factors_arg, argi)) {
-      parse_layer_options_from_string(svc_params, SCALE_FACTOR, arg.val,
-                                      svc_params->scaling_factor_num,
-                                      svc_params->scaling_factor_den);
+      aom_codec_err_t res = parse_layer_options_from_string(
+          svc_params, SCALE_FACTOR, arg.val, svc_params->scaling_factor_num,
+          svc_params->scaling_factor_den);
+      if (res != AOM_CODEC_OK) {
+        die("Failed to parse scale factors: %s\n",
+            aom_codec_err_to_string(res));
+      }
     } else if (arg_match(&arg, &min_q_arg, argi)) {
       enc_cfg->rc_min_quantizer = arg_parse_uint(&arg);
     } else if (arg_match(&arg, &max_q_arg, argi)) {
@@ -383,8 +391,11 @@ static void parse_command_line(int argc, const char **argv_,
   for (argi = argj = argv; (*argj = *argi); argi += arg.argv_step) {
     arg.argv_step = 1;
     if (arg_match(&arg, &bitrates_arg, argi)) {
-      parse_layer_options_from_string(svc_params, BITRATE, arg.val,
-                                      svc_params->layer_target_bitrate, NULL);
+      aom_codec_err_t res = parse_layer_options_from_string(
+          svc_params, BITRATE, arg.val, svc_params->layer_target_bitrate, NULL);
+      if (res != AOM_CODEC_OK) {
+        die("Failed to parse bitrates: %s\n", aom_codec_err_to_string(res));
+      }
     } else {
       ++argj;
     }
@@ -1166,14 +1177,13 @@ static void test_decode(aom_codec_ctx_t *encoder, aom_codec_ctx_t *decoder,
 #else
     aom_find_mismatch(&enc_img, &dec_img, y, u, v);
 #endif
-    decoder->err = 1;
-    printf(
-        "Encode/decode mismatch on frame %d at"
-        " Y[%d, %d] {%d/%d},"
-        " U[%d, %d] {%d/%d},"
-        " V[%d, %d] {%d/%d}",
-        frames_out, y[0], y[1], y[2], y[3], u[0], u[1], u[2], u[3], v[0], v[1],
-        v[2], v[3]);
+    fprintf(stderr,
+            "Encode/decode mismatch on frame %d at"
+            " Y[%d, %d] {%d/%d},"
+            " U[%d, %d] {%d/%d},"
+            " V[%d, %d] {%d/%d}\n",
+            frames_out, y[0], y[1], y[2], y[3], u[0], u[1], u[2], u[3], v[0],
+            v[1], v[2], v[3]);
     *mismatch_seen = frames_out;
   }
 
@@ -1209,7 +1219,6 @@ int main(int argc, const char **argv) {
   }
 #endif
 #if CONFIG_AV1_DECODER
-  int mismatch_seen = 0;
   aom_codec_ctx_t decoder;
 #endif
 
@@ -1231,6 +1240,9 @@ int main(int argc, const char **argv) {
   // spatial stream, using the scaling_mode control.
   const int test_dynamic_scaling_single_layer = 0;
 
+  // Flag to test setting speed per layer.
+  const int test_speed_per_layer = 0;
+
   /* Setup default input stream settings */
   app_input.input_ctx.framerate.numerator = 30;
   app_input.input_ctx.framerate.denominator = 1;
@@ -1242,7 +1254,7 @@ int main(int argc, const char **argv) {
   // start with default encoder configuration
   aom_codec_err_t res = aom_codec_enc_config_default(aom_codec_av1_cx(), &cfg,
                                                      AOM_USAGE_REALTIME);
-  if (res) {
+  if (res != AOM_CODEC_OK) {
     die("Failed to get config: %s\n", aom_codec_err_to_string(res));
   }
 
@@ -1466,6 +1478,24 @@ int main(int argc, const char **argv) {
           aom_codec_control(&codec, AV1E_SET_SVC_REF_FRAME_COMP_PRED,
                             &ref_frame_comp_pred);
         }
+        // Set the speed per layer.
+        if (test_speed_per_layer) {
+          int speed_per_layer = 10;
+          if (layer_id.spatial_layer_id == 0) {
+            if (layer_id.temporal_layer_id == 0) speed_per_layer = 6;
+            if (layer_id.temporal_layer_id == 1) speed_per_layer = 7;
+            if (layer_id.temporal_layer_id == 2) speed_per_layer = 8;
+          } else if (layer_id.spatial_layer_id == 1) {
+            if (layer_id.temporal_layer_id == 0) speed_per_layer = 7;
+            if (layer_id.temporal_layer_id == 1) speed_per_layer = 8;
+            if (layer_id.temporal_layer_id == 2) speed_per_layer = 9;
+          } else if (layer_id.spatial_layer_id == 2) {
+            if (layer_id.temporal_layer_id == 0) speed_per_layer = 8;
+            if (layer_id.temporal_layer_id == 1) speed_per_layer = 9;
+            if (layer_id.temporal_layer_id == 2) speed_per_layer = 10;
+          }
+          aom_codec_control(&codec, AOME_SET_CPUUSED, speed_per_layer);
+        }
       } else {
         // Only up to 3 temporal layers supported in fixed mode.
         // Only need to set spatial and temporal layer_id: reference
@@ -1547,7 +1577,6 @@ int main(int argc, const char **argv) {
 
       got_data = 0;
       while ((pkt = aom_codec_get_cx_data(&codec, &iter))) {
-        got_data = 1;
         switch (pkt->kind) {
           case AOM_CODEC_CX_FRAME_PKT:
             for (unsigned int sl = layer_id.spatial_layer_id;
@@ -1566,6 +1595,7 @@ int main(int argc, const char **argv) {
                   rc.layer_encoding_bitrate[j] += 8.0 * pkt->data.frame.sz;
               }
             }
+            got_data = 1;
             // Write everything into the top layer.
             if (app_input.output_obu) {
               fwrite(pkt->data.frame.buf, 1, pkt->data.frame.sz,
@@ -1621,7 +1651,7 @@ int main(int argc, const char **argv) {
             if (app_input.decode) {
               if (aom_codec_decode(&decoder, pkt->data.frame.buf,
                                    (unsigned int)pkt->data.frame.sz, NULL))
-                die_codec(&decoder, "Failed to decode frame.");
+                die_codec(&decoder, "Failed to decode frame");
             }
 #endif
 
@@ -1630,13 +1660,22 @@ int main(int argc, const char **argv) {
         }
       }
 #if CONFIG_AV1_DECODER
-      if (app_input.decode) {
+      if (got_data && app_input.decode) {
         // Don't look for mismatch on top spatial and top temporal layers as
         // they are non reference frames.
         if ((ss_number_layers > 1 || ts_number_layers > 1) &&
             !(layer_id.temporal_layer_id > 0 &&
               layer_id.temporal_layer_id == (int)ts_number_layers - 1)) {
+          int mismatch_seen = 0;
           test_decode(&codec, &decoder, frame_cnt, &mismatch_seen);
+          if (mismatch_seen) {
+#if CONFIG_INTERNAL_STATS
+            fprintf(stats_file, "First mismatch occurred in frame %d\n",
+                    mismatch_seen);
+            fclose(stats_file);
+#endif
+            die("Mismatch seen");
+          }
         }
       }
 #endif
@@ -1666,12 +1705,15 @@ int main(int argc, const char **argv) {
 
   if (aom_codec_destroy(&codec)) die_codec(&codec, "Failed to destroy codec");
 
-#if CONFIG_INTERNAL_STATS
-  if (mismatch_seen) {
-    fprintf(stats_file, "First mismatch occurred in frame %d\n", mismatch_seen);
-  } else {
-    fprintf(stats_file, "No mismatch detected in recon buffers\n");
+#if CONFIG_AV1_DECODER
+  if (app_input.decode) {
+    if (aom_codec_destroy(&decoder))
+      die_codec(&decoder, "Failed to destroy decoder");
   }
+#endif
+
+#if CONFIG_INTERNAL_STATS
+  fprintf(stats_file, "No mismatch detected in recon buffers\n");
   fclose(stats_file);
 #endif
 
