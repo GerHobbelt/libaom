@@ -287,8 +287,8 @@ static INLINE void sad4xhx4d_neon(const uint8_t *src, int src_stride,
 
   src += 2 * src_stride;
   int ref_offset = 2 * ref_stride;
-  int i = (h - 1) / 2;
-  do {
+  int i = h / 2;
+  while (--i != 0) {
     s = load_unaligned_u8(src, src_stride);
     r0 = load_unaligned_u8(ref[0] + ref_offset, ref_stride);
     r1 = load_unaligned_u8(ref[1] + ref_offset, ref_stride);
@@ -302,7 +302,7 @@ static INLINE void sad4xhx4d_neon(const uint8_t *src, int src_stride,
 
     src += 2 * src_stride;
     ref_offset += 2 * ref_stride;
-  } while (--i != 0);
+  }
 
   vst1q_u32(res, horizontal_add_4d_u16x8(sum));
 }
@@ -316,32 +316,34 @@ static INLINE void sad4xhx4d_neon(const uint8_t *src, int src_stride,
 
 SAD_WXH_4D_NEON(4, 4)
 SAD_WXH_4D_NEON(4, 8)
-SAD_WXH_4D_NEON(4, 16)
-SAD_WXH_4D_NEON(4, 32)
 
 SAD_WXH_4D_NEON(8, 4)
 SAD_WXH_4D_NEON(8, 8)
 SAD_WXH_4D_NEON(8, 16)
-SAD_WXH_4D_NEON(8, 32)
 
-SAD_WXH_4D_NEON(16, 4)
 SAD_WXH_4D_NEON(16, 8)
 SAD_WXH_4D_NEON(16, 16)
 SAD_WXH_4D_NEON(16, 32)
-SAD_WXH_4D_NEON(16, 64)
 
-SAD_WXH_4D_NEON(32, 8)
 SAD_WXH_4D_NEON(32, 16)
 SAD_WXH_4D_NEON(32, 32)
 SAD_WXH_4D_NEON(32, 64)
 
-SAD_WXH_4D_NEON(64, 16)
 SAD_WXH_4D_NEON(64, 32)
 SAD_WXH_4D_NEON(64, 64)
 SAD_WXH_4D_NEON(64, 128)
 
 SAD_WXH_4D_NEON(128, 64)
 SAD_WXH_4D_NEON(128, 128)
+
+#if !CONFIG_REALTIME_ONLY
+SAD_WXH_4D_NEON(4, 16)
+SAD_WXH_4D_NEON(8, 32)
+SAD_WXH_4D_NEON(16, 4)
+SAD_WXH_4D_NEON(16, 64)
+SAD_WXH_4D_NEON(32, 8)
+SAD_WXH_4D_NEON(64, 16)
+#endif  // !CONFIG_REALTIME_ONLY
 
 #undef SAD_WXH_4D_NEON
 
@@ -357,30 +359,35 @@ SAD_WXH_4D_NEON(128, 128)
     res[3] <<= 1;                                                           \
   }
 
+SAD_SKIP_WXH_4D_NEON(4, 4)
 SAD_SKIP_WXH_4D_NEON(4, 8)
-SAD_SKIP_WXH_4D_NEON(4, 16)
-SAD_SKIP_WXH_4D_NEON(4, 32)
 
+SAD_SKIP_WXH_4D_NEON(8, 4)
 SAD_SKIP_WXH_4D_NEON(8, 8)
 SAD_SKIP_WXH_4D_NEON(8, 16)
-SAD_SKIP_WXH_4D_NEON(8, 32)
 
 SAD_SKIP_WXH_4D_NEON(16, 8)
 SAD_SKIP_WXH_4D_NEON(16, 16)
 SAD_SKIP_WXH_4D_NEON(16, 32)
-SAD_SKIP_WXH_4D_NEON(16, 64)
 
-SAD_SKIP_WXH_4D_NEON(32, 8)
 SAD_SKIP_WXH_4D_NEON(32, 16)
 SAD_SKIP_WXH_4D_NEON(32, 32)
 SAD_SKIP_WXH_4D_NEON(32, 64)
 
-SAD_SKIP_WXH_4D_NEON(64, 16)
 SAD_SKIP_WXH_4D_NEON(64, 32)
 SAD_SKIP_WXH_4D_NEON(64, 64)
 SAD_SKIP_WXH_4D_NEON(64, 128)
 
 SAD_SKIP_WXH_4D_NEON(128, 64)
 SAD_SKIP_WXH_4D_NEON(128, 128)
+
+#if !CONFIG_REALTIME_ONLY
+SAD_SKIP_WXH_4D_NEON(4, 16)
+SAD_SKIP_WXH_4D_NEON(8, 32)
+SAD_SKIP_WXH_4D_NEON(16, 4)
+SAD_SKIP_WXH_4D_NEON(16, 64)
+SAD_SKIP_WXH_4D_NEON(32, 8)
+SAD_SKIP_WXH_4D_NEON(64, 16)
+#endif  // !CONFIG_REALTIME_ONLY
 
 #undef SAD_SKIP_WXH_4D_NEON

@@ -1617,40 +1617,6 @@ static AOM_INLINE void terminate_worker_data(AV1_PRIMARY *ppi) {
   }
 }
 
-// Deallocate allocated thread_data.
-static AOM_INLINE void free_thread_data(AV1_PRIMARY *ppi) {
-  PrimaryMultiThreadInfo *const p_mt_info = &ppi->p_mt_info;
-  for (int t = 1; t < p_mt_info->num_workers; ++t) {
-    EncWorkerData *const thread_data = &p_mt_info->tile_thr_data[t];
-    thread_data->td = thread_data->original_td;
-    aom_free(thread_data->td->tctx);
-    aom_free(thread_data->td->palette_buffer);
-    aom_free(thread_data->td->tmp_conv_dst);
-    release_compound_type_rd_buffers(&thread_data->td->comp_rd_buffer);
-    for (int j = 0; j < 2; ++j) {
-      aom_free(thread_data->td->tmp_pred_bufs[j]);
-    }
-    aom_free(thread_data->td->pixel_gradient_info);
-    aom_free(thread_data->td->src_var_info_of_4x4_sub_blocks);
-    release_obmc_buffers(&thread_data->td->obmc_buffer);
-    aom_free(thread_data->td->vt64x64);
-
-    for (int x = 0; x < 2; x++) {
-      for (int y = 0; y < 2; y++) {
-        aom_free(thread_data->td->hash_value_buffer[x][y]);
-        thread_data->td->hash_value_buffer[x][y] = NULL;
-      }
-    }
-    aom_free(thread_data->td->counts);
-    av1_free_pmc(thread_data->td->firstpass_ctx,
-                 ppi->seq_params.monochrome ? 1 : MAX_MB_PLANE);
-    thread_data->td->firstpass_ctx = NULL;
-    av1_free_shared_coeff_buffer(&thread_data->td->shared_coeff_buf);
-    av1_free_sms_tree(thread_data->td);
-    aom_free(thread_data->td);
-  }
-}
-
 void av1_remove_primary_compressor(AV1_PRIMARY *ppi) {
   if (!ppi) return;
 #if !CONFIG_REALTIME_ONLY
@@ -4141,10 +4107,10 @@ int av1_receive_raw_frame(AV1_COMP *cpi, aom_enc_frame_flags_t frame_flags,
       // No noise synthesis if source is very clean.
       // Uses a low edge threshold to focus on smooth areas.
       // Increase output noise setting a little compared to measured value.
-      cpi->oxcf.noise_level =
-          (float)(av1_estimate_noise_from_single_plane(
-                      sd, 0, cm->seq_params->bit_depth, 16) -
-                  0.1);
+      double y_noise_level = 0.0;
+      av1_estimate_noise_level(sd, &y_noise_level, AOM_PLANE_Y, AOM_PLANE_Y,
+                               cm->seq_params->bit_depth, 16);
+      cpi->oxcf.noise_level = (float)(y_noise_level - 0.1);
       cpi->oxcf.noise_level = (float)AOMMAX(0.0, cpi->oxcf.noise_level);
       if (cpi->oxcf.noise_level > 0.0) {
         cpi->oxcf.noise_level += (float)0.5;

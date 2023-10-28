@@ -1153,6 +1153,7 @@ static void set_good_speed_features_framesize_independent(
 
     sf->inter_sf.alt_ref_search_fp = 2;
     sf->inter_sf.txfm_rd_gate_level = boosted ? 0 : 3;
+    sf->inter_sf.motion_mode_txfm_rd_gating_offset = boosted ? 0 : 2;
 
     sf->inter_sf.prune_inter_modes_based_on_tpl = boosted ? 0 : 2;
     sf->inter_sf.prune_ext_comp_using_neighbors = 2;
@@ -1210,7 +1211,6 @@ static void set_good_speed_features_framesize_independent(
 
     sf->inter_sf.prune_inter_modes_if_skippable = 1;
     sf->inter_sf.txfm_rd_gate_level = boosted ? 0 : 4;
-    sf->inter_sf.motion_mode_txfm_rd_gating_offset = boosted ? 0 : 1;
     sf->inter_sf.enable_fast_compound_mode_search = 2;
 
     sf->intra_sf.chroma_intra_pruning_with_hog = 3;
@@ -2301,6 +2301,21 @@ void av1_set_speed_features_framesize_independent(AV1_COMP *cpi, int speed) {
   if (!oxcf->txfm_cfg.enable_tx_size_search &&
       sf->rt_sf.use_nonrd_pick_mode == 0) {
     sf->winner_mode_sf.tx_size_search_level = 3;
+  }
+
+  if (cpi->mt_info.num_workers > 1) {
+    // Loop restoration stage is conditionally disabled for speed 5, 6 when
+    // num_workers > 1. Since av1_pick_filter_restoration() is not
+    // multi-threaded, enabling the Loop restoration stage will cause an
+    // increase in encode time (3% to 7% increase depends on frame
+    // resolution).
+    // TODO(any): Implement multi-threading of av1_pick_filter_restoration()
+    // and enable Wiener filter for speed 5, 6 similar to single thread
+    // encoding path.
+    if (speed >= 5) {
+      sf->lpf_sf.disable_sgr_filter = true;
+      sf->lpf_sf.disable_wiener_filter = true;
+    }
   }
 
   if (!cpi->ppi->seq_params_locked) {

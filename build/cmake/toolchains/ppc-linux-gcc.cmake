@@ -17,8 +17,9 @@ set(CMAKE_SYSTEM_NAME "Linux")
 
 if("${CROSS}" STREQUAL "")
 
-  # Default the cross compiler prefix to something known to work.
-  set(CROSS powerpc64le-unknown-linux-gnu-)
+  # Default the cross compiler prefix to one used by Debian and other package
+  # management systems.
+  set(CROSS powerpc64le-linux-gnu-)
 endif()
 
 if(NOT CMAKE_C_COMPILER)
