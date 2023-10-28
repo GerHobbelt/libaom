@@ -14,6 +14,7 @@
 #include <time.h>
 #include <stdio.h>
 #include <stdbool.h>
+#include <string.h>
 #include <assert.h>
 
 #include "aom_dsp/flow_estimation/ransac.h"
@@ -210,27 +211,6 @@ static bool find_affine(int np, const double *pts1, const double *pts2,
   return true;
 }
 
-static void get_rand_indices(int npoints, int minpts, int *indices,
-                             unsigned int *seed) {
-  int i, j;
-  int ptr = lcg_rand16(seed) % npoints;
-  assert(minpts < npoints);
-  indices[0] = ptr;
-  ptr = (ptr == npoints - 1 ? 0 : ptr + 1);
-  i = 1;
-  while (i < minpts) {
-    int index = lcg_rand16(seed) % npoints;
-    while (index) {
-      ptr = (ptr == npoints - 1 ? 0 : ptr + 1);
-      for (j = 0; j < i; ++j) {
-        if (indices[j] == ptr) break;
-      }
-      if (j == i) index--;
-    }
-    indices[i++] = ptr;
-  }
-}
-
 typedef struct {
   int num_inliers;
   double sse;  // Sum of squared errors of inliers
@@ -263,19 +243,11 @@ static void copy_points_at_indices(double *dest, const double *src,
   }
 }
 
-static const double kInfinity = 1e12;
-
-static void clear_motion(RANSAC_MOTION *motion, int num_points) {
-  motion->num_inliers = 0;
-  motion->sse = kInfinity;
-  memset(motion->inlier_indices, 0,
-         sizeof(*motion->inlier_indices) * num_points);
-}
-
 // Returns true on success, false on error
 static bool ransac_internal(const Correspondence *matched_points, int npoints,
                             MotionModel *motion_models, int num_desired_motions,
                             const RansacModelInfo *model_info) {
+  assert(npoints >= 0);
   int i = 0;
   int minpts = model_info->minpts;
   bool ret_val = true;
@@ -298,12 +270,11 @@ static bool ransac_internal(const Correspondence *matched_points, int npoints,
   // currently under consideration.
   double params_this_motion[MAX_PARAMDIM];
 
-  for (i = 0; i < num_desired_motions; ++i) {
-    motion_models[i].num_inliers = 0;
-  }
   if (npoints < minpts * MINPTS_MULTIPLIER || npoints == 0) {
     return false;
   }
+
+  int min_inliers = AOMMAX((int)(MIN_INLIER_PROB * npoints), minpts);
 
   points1 = (double *)aom_malloc(sizeof(*points1) * npoints * 2);
   points2 = (double *)aom_malloc(sizeof(*points2) * npoints * 2);
@@ -312,7 +283,7 @@ static bool ransac_internal(const Correspondence *matched_points, int npoints,
   projected_corners =
       (double *)aom_malloc(sizeof(*projected_corners) * npoints * 2);
   motions =
-      (RANSAC_MOTION *)aom_malloc(sizeof(RANSAC_MOTION) * num_desired_motions);
+      (RANSAC_MOTION *)aom_calloc(num_desired_motions, sizeof(RANSAC_MOTION));
 
   // Allocate one large buffer which will be carved up to store the inlier
   // indices for the current motion plus the num_desired_motions many
@@ -334,10 +305,9 @@ static bool ransac_internal(const Correspondence *matched_points, int npoints,
 
   for (i = 0; i < num_desired_motions; ++i) {
     motions[i].inlier_indices = inlier_buffer + i * npoints;
-    clear_motion(motions + i, npoints);
   }
+  memset(&current_motion, 0, sizeof(current_motion));
   current_motion.inlier_indices = inlier_buffer + num_desired_motions * npoints;
-  clear_motion(&current_motion, npoints);
 
   for (i = 0; i < npoints; ++i) {
     corners1[2 * i + 0] = matched_points[i].x;
@@ -347,7 +317,7 @@ static bool ransac_internal(const Correspondence *matched_points, int npoints,
   }
 
   for (int trial_count = 0; trial_count < NUM_TRIALS; trial_count++) {
-    get_rand_indices(npoints, minpts, indices, &seed);
+    lcg_pick(npoints, minpts, indices, &seed);
 
     copy_points_at_indices(points1, corners1, indices, minpts);
     copy_points_at_indices(points2, corners2, indices, minpts);
@@ -377,7 +347,7 @@ static bool ransac_internal(const Correspondence *matched_points, int npoints,
       }
     }
 
-    if (current_motion.num_inliers < MIN_INLIER_PROB * npoints) {
+    if (current_motion.num_inliers < min_inliers) {
       // Reject models with too few inliers
       continue;
     }
@@ -389,9 +359,19 @@ static bool ransac_internal(const Correspondence *matched_points, int npoints,
       // will be recomputed later using only the inliers.
       worst_kept_motion->num_inliers = current_motion.num_inliers;
       worst_kept_motion->sse = current_motion.sse;
-      memcpy(worst_kept_motion->inlier_indices, current_motion.inlier_indices,
-             sizeof(*current_motion.inlier_indices) * npoints);
-      assert(npoints > 0);
+
+      // Rather than copying the (potentially many) inlier indices from
+      // current_motion.inlier_indices to worst_kept_motion->inlier_indices,
+      // we can swap the underlying pointers.
+      //
+      // This is okay because the next time current_motion.inlier_indices
+      // is used will be in the next trial, where we ignore its previous
+      // contents anyway. And both arrays will be deallocated together at the
+      // end of this function, so there are no lifetime issues.
+      int *tmp = worst_kept_motion->inlier_indices;
+      worst_kept_motion->inlier_indices = current_motion.inlier_indices;
+      current_motion.inlier_indices = tmp;
+
       // Determine the new worst kept motion and its num_inliers and sse.
       for (i = 0; i < num_desired_motions; ++i) {
         if (is_better_motion(worst_kept_motion, &motions[i])) {
@@ -415,8 +395,16 @@ static bool ransac_internal(const Correspondence *matched_points, int npoints,
       copy_points_at_indices(points2, corners2, motions[i].inlier_indices,
                              num_inliers);
 
-      model_info->find_transformation(num_inliers, points1, points2,
-                                      motion_models[i].params);
+      if (!model_info->find_transformation(num_inliers, points1, points2,
+                                           motion_models[i].params)) {
+        // In the unlikely event that this model fitting fails,
+        // we don't have a good fallback. So just clear the output
+        // model and move on
+        memcpy(motion_models[i].params, kIdentityParams,
+               MAX_PARAMDIM * sizeof(*(motion_models[i].params)));
+        motion_models[i].num_inliers = 0;
+        continue;
+      }
 
       // Populate inliers array
       for (int j = 0; j < num_inliers; j++) {
@@ -425,8 +413,12 @@ static bool ransac_internal(const Correspondence *matched_points, int npoints,
         motion_models[i].inliers[2 * j + 0] = (int)rint(corr->x);
         motion_models[i].inliers[2 * j + 1] = (int)rint(corr->y);
       }
+      motion_models[i].num_inliers = num_inliers;
+    } else {
+      memcpy(motion_models[i].params, kIdentityParams,
+             MAX_PARAMDIM * sizeof(*(motion_models[i].params)));
+      motion_models[i].num_inliers = 0;
     }
-    motion_models[i].num_inliers = num_inliers;
   }
 
 finish_ransac:
