@@ -17,6 +17,7 @@
  */
 /*! @} - end defgroup gf_group_algo */
 
+#include <assert.h>
 #include <stdint.h>
 
 #include "aom_mem/aom_mem.h"
@@ -939,6 +940,7 @@ static void allocate_gf_group_bits(GF_GROUP *gf_group,
   // Allocate extra bits to each ARF layer
   int i;
   int layer_extra_bits[MAX_ARF_LAYERS + 1] = { 0 };
+  assert(max_arf_layer <= MAX_ARF_LAYERS);
   for (i = 1; i <= max_arf_layer; ++i) {
     double fraction = (i == max_arf_layer) ? 1.0 : layer_fraction[i];
     layer_extra_bits[i] =
@@ -3674,6 +3676,10 @@ void av1_get_second_pass_params(AV1_COMP *cpi,
     frame_params->show_frame =
         !(gf_group->update_type[cpi->gf_frame_index] == ARF_UPDATE ||
           gf_group->update_type[cpi->gf_frame_index] == INTNL_ARF_UPDATE);
+    if (cpi->gf_frame_index == 0) {
+      av1_tf_info_reset(&cpi->ppi->tf_info);
+      av1_tf_info_filtering(&cpi->ppi->tf_info, cpi, gf_group);
+    }
     return;
   }
 
