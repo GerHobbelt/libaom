@@ -82,6 +82,10 @@ static INLINE void store_u8_8x2(uint8_t *s, ptrdiff_t p, const uint8x8_t s0,
   s += p;
 }
 
+static INLINE uint8x16_t load_u8_8x2(const uint8_t *s, ptrdiff_t p) {
+  return vcombine_u8(vld1_u8(s), vld1_u8(s + p));
+}
+
 /* These intrinsics require immediate values, so we must use #defines
    to enforce that. */
 #define load_u8_4x1(s, s0, lane)                                           \
