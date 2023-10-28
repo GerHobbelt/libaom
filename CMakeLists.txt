@@ -59,7 +59,7 @@ endif()
 #
 # We set SO_FILE_VERSION = [c-a].a.r
 set(LT_CURRENT 9)
-set(LT_REVISION 0)
+set(LT_REVISION 1)
 set(LT_AGE 6)
 math(EXPR SO_VERSION "${LT_CURRENT} - ${LT_AGE}")
 set(SO_FILE_VERSION "${SO_VERSION}.${LT_AGE}.${LT_REVISION}")
@@ -833,7 +833,15 @@ if(ENABLE_EXAMPLES AND "${CMAKE_GENERATOR}" MATCHES "Makefiles$")
 endif()
 
 if(BUILD_SHARED_LIBS)
-  if(NOT WIN32 AND NOT APPLE)
+  # Don't use -Wl,-z,defs with Clang's sanitizers.
+  #
+  # Clang's AddressSanitizer documentation says "When linking shared libraries,
+  # the AddressSanitizer run-time is not linked, so -Wl,-z,defs may cause link
+  # errors (don't use it with AddressSanitizer)." See
+  # https://clang.llvm.org/docs/AddressSanitizer.html#usage.
+  if(NOT WIN32
+     AND NOT APPLE
+     AND NOT (CMAKE_C_COMPILER_ID MATCHES "Clang" AND SANITIZE))
     # The -z defs linker option reports unresolved symbol references from object
     # files when building a shared library.
     if("${CMAKE_VERSION}" VERSION_LESS "3.13")

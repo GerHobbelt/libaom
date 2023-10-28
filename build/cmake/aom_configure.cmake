@@ -242,9 +242,6 @@ if(AOM_TARGET_SYSTEM STREQUAL "Windows")
   # The default _WIN32_WINNT value in MinGW is 0x0502 (Windows XP with SP2). Set
   # it to 0x0601 (Windows 7).
   add_compiler_flag_if_supported("-D_WIN32_WINNT=0x0601")
-  # Prevent windows.h from defining the min and max macros. This allows us to
-  # use std::min and std::max.
-  add_compiler_flag_if_supported("-DNOMINMAX")
   # Quiet warnings related to fopen, printf, etc.
   add_compiler_flag_if_supported("-D_CRT_SECURE_NO_WARNINGS")
 endif()
@@ -317,9 +314,9 @@ else()
   if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang"
      AND CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "GNU"
      AND CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
-    # MSVC's STL requires C++14 as it's the compiler's default and minimum
-    # supported C++ version. However, clang (as opposed to clang-cl) in Visual
-    # Studio defaults to C++11.
+    # Microsoft's C++ Standard Library requires C++14 as it's MSVC's default and
+    # minimum supported C++ version. If Clang is using this Standard Library
+    # implementation, it cannot target C++11.
     require_cxx_flag_nomsvc("-std=c++14" YES)
   else()
     require_cxx_flag_nomsvc("-std=c++11" YES)
