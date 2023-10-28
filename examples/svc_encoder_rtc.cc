@@ -18,6 +18,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <memory>
+
 #include "config/aom_config.h"
 
 #if CONFIG_AV1_DECODER
@@ -30,6 +32,7 @@
 #include "common/video_writer.h"
 #include "examples/encoder_util.h"
 #include "aom_ports/aom_timer.h"
+#include "av1/ratectrl_rtc.h"
 
 #define OPTION_BUFFER_SIZE 1024
 
@@ -44,6 +47,7 @@ typedef struct {
   int decode;
   int tune_content;
   int show_psnr;
+  bool use_external_rc;
 } AppInput;
 
 typedef enum {
@@ -99,6 +103,8 @@ static const arg_def_t test_decode_arg =
             "Attempt to test decoding the output when set to 1. Default is 1.");
 static const arg_def_t psnr_arg =
     ARG_DEF(NULL, "psnr", -1, "Show PSNR in status line.");
+static const arg_def_t ext_rc_arg =
+    ARG_DEF(NULL, "use-ext-rc", 0, "Use external rate control.");
 static const struct arg_enum_list tune_content_enum[] = {
   { "default", AOM_CONTENT_DEFAULT },
   { "screen", AOM_CONTENT_SCREEN },
@@ -196,7 +202,7 @@ static void open_input_file(struct AvxInputContext *input,
       input->framerate.numerator = input->y4m.fps_n;
       input->framerate.denominator = input->y4m.fps_d;
       input->fmt = input->y4m.aom_fmt;
-      input->bit_depth = input->y4m.bit_depth;
+      input->bit_depth = static_cast<aom_bit_depth_t>(input->y4m.bit_depth);
     } else {
       fatal("Unsupported Y4M stream.");
     }
@@ -247,7 +253,7 @@ static aom_codec_err_t parse_layer_options_from_string(
     return AOM_CODEC_INVALID_PARAM;
 
   const size_t input_length = strlen(input);
-  input_string = malloc(input_length + 1);
+  input_string = reinterpret_cast<char *>(malloc(input_length + 1));
   if (input_string == NULL) return AOM_CODEC_MEM_ERROR;
   memcpy(input_string, input, input_length + 1);
   token = strtok(input_string, delim);  // NOLINT
@@ -335,7 +341,8 @@ static void parse_command_line(int argc, const char **argv_,
       enc_cfg->rc_max_quantizer = arg_parse_uint(&arg);
 #if CONFIG_AV1_HIGHBITDEPTH
     } else if (arg_match(&arg, &bitdepth_arg, argi)) {
-      enc_cfg->g_bit_depth = arg_parse_enum_or_int(&arg);
+      enc_cfg->g_bit_depth =
+          static_cast<aom_bit_depth_t>(arg_parse_enum_or_int(&arg));
       switch (enc_cfg->g_bit_depth) {
         case AOM_BITS_8:
           enc_cfg->g_input_bit_depth = 8;
@@ -371,6 +378,8 @@ static void parse_command_line(int argc, const char **argv_,
       printf("tune content %d\n", app_input->tune_content);
     } else if (arg_match(&arg, &psnr_arg, argi)) {
       app_input->show_psnr = 1;
+    } else if (arg_match(&arg, &ext_rc_arg, argi)) {
+      app_input->use_external_rc = true;
     } else {
       ++argj;
     }
@@ -406,7 +415,7 @@ static void parse_command_line(int argc, const char **argv_,
   app_input->input_ctx.filename = argv[0];
   free(argv);
 
-  open_input_file(&app_input->input_ctx, 0);
+  open_input_file(&app_input->input_ctx, AOM_CSP_UNKNOWN);
   if (app_input->input_ctx.file_type == FILE_TYPE_Y4M) {
     enc_cfg->g_w = app_input->input_ctx.width;
     enc_cfg->g_h = app_input->input_ctx.height;
@@ -1148,15 +1157,19 @@ static int test_decode(aom_codec_ctx_t *encoder, aom_codec_ctx_t *decoder,
       (dec_img.fmt & AOM_IMG_FMT_HIGHBITDEPTH)) {
     if (enc_img.fmt & AOM_IMG_FMT_HIGHBITDEPTH) {
       aom_image_t enc_hbd_img;
-      aom_img_alloc(&enc_hbd_img, enc_img.fmt - AOM_IMG_FMT_HIGHBITDEPTH,
-                    enc_img.d_w, enc_img.d_h, 16);
+      aom_img_alloc(
+          &enc_hbd_img,
+          static_cast<aom_img_fmt_t>(enc_img.fmt - AOM_IMG_FMT_HIGHBITDEPTH),
+          enc_img.d_w, enc_img.d_h, 16);
       aom_img_truncate_16_to_8(&enc_hbd_img, &enc_img);
       enc_img = enc_hbd_img;
     }
     if (dec_img.fmt & AOM_IMG_FMT_HIGHBITDEPTH) {
       aom_image_t dec_hbd_img;
-      aom_img_alloc(&dec_hbd_img, dec_img.fmt - AOM_IMG_FMT_HIGHBITDEPTH,
-                    dec_img.d_w, dec_img.d_h, 16);
+      aom_img_alloc(
+          &dec_hbd_img,
+          static_cast<aom_img_fmt_t>(dec_img.fmt - AOM_IMG_FMT_HIGHBITDEPTH),
+          dec_img.d_w, dec_img.d_h, 16);
       aom_img_truncate_16_to_8(&dec_hbd_img, &dec_img);
       dec_img = dec_hbd_img;
     }
@@ -1215,6 +1228,51 @@ static void show_psnr(struct psnr_stats *psnr_stream, double peak) {
   fprintf(stderr, "\n");
 }
 
+static aom::AV1RateControlRtcConfig create_rtc_rc_config(
+    const aom_codec_enc_cfg_t &cfg, const AppInput &app_input) {
+  aom::AV1RateControlRtcConfig rc_cfg;
+  rc_cfg.width = cfg.g_w;
+  rc_cfg.height = cfg.g_h;
+  rc_cfg.max_quantizer = cfg.rc_max_quantizer;
+  rc_cfg.min_quantizer = cfg.rc_min_quantizer;
+  rc_cfg.target_bandwidth = cfg.rc_target_bitrate;
+  rc_cfg.buf_initial_sz = cfg.rc_buf_initial_sz;
+  rc_cfg.buf_optimal_sz = cfg.rc_buf_optimal_sz;
+  rc_cfg.buf_sz = cfg.rc_buf_sz;
+  rc_cfg.overshoot_pct = cfg.rc_overshoot_pct;
+  rc_cfg.undershoot_pct = cfg.rc_undershoot_pct;
+  // This is hardcoded as AOME_SET_MAX_INTRA_BITRATE_PCT
+  rc_cfg.max_intra_bitrate_pct = 300;
+  rc_cfg.framerate = cfg.g_timebase.den;
+  // TODO(jianj): Add suppor for SVC.
+  rc_cfg.ss_number_layers = 1;
+  rc_cfg.ts_number_layers = 1;
+  rc_cfg.scaling_factor_num[0] = 1;
+  rc_cfg.scaling_factor_den[0] = 1;
+  rc_cfg.layer_target_bitrate[0] = static_cast<int>(rc_cfg.target_bandwidth);
+  rc_cfg.max_quantizers[0] = rc_cfg.max_quantizer;
+  rc_cfg.min_quantizers[0] = rc_cfg.min_quantizer;
+  rc_cfg.aq_mode = app_input.aq_mode;
+
+  return rc_cfg;
+}
+
+static int qindex_to_quantizer(int qindex) {
+  // Table that converts 0-63 range Q values passed in outside to the 0-255
+  // range Qindex used internally.
+  static const int quantizer_to_qindex[] = {
+    0,   4,   8,   12,  16,  20,  24,  28,  32,  36,  40,  44,  48,
+    52,  56,  60,  64,  68,  72,  76,  80,  84,  88,  92,  96,  100,
+    104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 144, 148, 152,
+    156, 160, 164, 168, 172, 176, 180, 184, 188, 192, 196, 200, 204,
+    208, 212, 216, 220, 224, 228, 232, 236, 240, 244, 249, 255,
+  };
+  for (int quantizer = 0; quantizer < 64; ++quantizer)
+    if (quantizer_to_qindex[quantizer] >= qindex) return quantizer;
+
+  return 63;
+}
+
 int main(int argc, const char **argv) {
   AppInput app_input;
   AvxVideoWriter *outfile[AOM_MAX_LAYERS] = { NULL };
@@ -1254,6 +1312,7 @@ int main(int argc, const char **argv) {
   double framerate = 30.0;
   int use_svc_control = 1;
   int set_err_resil_frame = 0;
+  int test_changing_bitrate = 0;
   zero(rc.layer_target_bitrate);
   memset(&layer_id, 0, sizeof(aom_svc_layer_id_t));
   memset(&app_input, 0, sizeof(AppInput));
@@ -1270,7 +1329,7 @@ int main(int argc, const char **argv) {
   app_input.input_ctx.framerate.numerator = 30;
   app_input.input_ctx.framerate.denominator = 1;
   app_input.input_ctx.only_i420 = 0;
-  app_input.input_ctx.bit_depth = 0;
+  app_input.input_ctx.bit_depth = AOM_BITS_8;
   app_input.speed = 7;
   exec_name = argv[0];
 
@@ -1441,6 +1500,10 @@ int main(int argc, const char **argv) {
     aom_codec_control(&codec, AV1E_SET_ENABLE_INTRABC, 0);
   }
 
+  if (app_input.use_external_rc) {
+    aom_codec_control(&codec, AV1E_SET_RTC_EXTERNAL_RC, 1);
+  }
+
   svc_params.number_spatial_layers = ss_number_layers;
   svc_params.number_temporal_layers = ts_number_layers;
   for (i = 0; i < ss_number_layers * ts_number_layers; ++i) {
@@ -1475,6 +1538,13 @@ int main(int argc, const char **argv) {
   for (int lx = 0; lx < ts_number_layers * ss_number_layers; lx++) {
     cx_time_layer[lx] = 0;
     frame_cnt_layer[lx] = 0;
+  }
+
+  std::unique_ptr<aom::AV1RateControlRTC> rc_api;
+  if (app_input.use_external_rc) {
+    const aom::AV1RateControlRtcConfig rc_cfg =
+        create_rtc_rc_config(cfg, app_input);
+    rc_api = aom::AV1RateControlRTC::Create(rc_cfg);
   }
 
   frame_avail = 1;
@@ -1598,6 +1668,38 @@ int main(int argc, const char **argv) {
         }
       }
 
+      // Change target_bitrate every other frame.
+      if (test_changing_bitrate && frame_cnt % 2 == 0) {
+        if (frame_cnt < 500)
+          cfg.rc_target_bitrate += 10;
+        else
+          cfg.rc_target_bitrate -= 10;
+        // Do big increase and decrease.
+        if (frame_cnt == 100) cfg.rc_target_bitrate <<= 1;
+        if (frame_cnt == 600) cfg.rc_target_bitrate >>= 1;
+        if (cfg.rc_target_bitrate < 100) cfg.rc_target_bitrate = 100;
+        // Call change_config, or bypass with new control.
+        // res = aom_codec_enc_config_set(&codec, &cfg);
+        if (aom_codec_control(&codec, AV1E_SET_BITRATE_ONE_PASS_CBR,
+                              cfg.rc_target_bitrate))
+          die_codec(&codec, "Failed to SET_BITRATE_ONE_PASS_CBR");
+      }
+
+      if (rc_api) {
+        aom::AV1FrameParamsRTC frame_params;
+        // TODO(jianj): Add support for SVC.
+        frame_params.spatial_layer_id = 0;
+        frame_params.temporal_layer_id = 0;
+        frame_params.frame_type =
+            is_key_frame ? aom::kKeyFrame : aom::kInterFrame;
+        rc_api->ComputeQP(frame_params);
+        const int current_qp = rc_api->GetQP();
+        if (aom_codec_control(&codec, AV1E_SET_QUANTIZER_ONE_PASS,
+                              qindex_to_quantizer(current_qp))) {
+          die_codec(&codec, "Failed to SET_QUANTIZER_ONE_PASS");
+        }
+      }
+
       // Do the layer encode.
       aom_usec_timer_start(&timer);
       if (aom_codec_encode(&codec, frame_avail ? &raw : NULL, pts, 1, flags))
@@ -1620,8 +1722,10 @@ int main(int argc, const char **argv) {
                   fwrite(pkt->data.frame.buf, 1, pkt->data.frame.sz,
                          obu_files[j]);
                 } else {
-                  aom_video_writer_write_frame(outfile[j], pkt->data.frame.buf,
-                                               pkt->data.frame.sz, pts);
+                  aom_video_writer_write_frame(
+                      outfile[j],
+                      reinterpret_cast<const uint8_t *>(pkt->data.frame.buf),
+                      pkt->data.frame.sz, pts);
                 }
                 if (sl == layer_id.spatial_layer_id)
                   rc.layer_encoding_bitrate[j] += 8.0 * pkt->data.frame.sz;
@@ -1633,9 +1737,10 @@ int main(int argc, const char **argv) {
               fwrite(pkt->data.frame.buf, 1, pkt->data.frame.sz,
                      total_layer_obu_file);
             } else {
-              aom_video_writer_write_frame(total_layer_file,
-                                           pkt->data.frame.buf,
-                                           pkt->data.frame.sz, pts);
+              aom_video_writer_write_frame(
+                  total_layer_file,
+                  reinterpret_cast<const uint8_t *>(pkt->data.frame.buf),
+                  pkt->data.frame.sz, pts);
             }
             // Keep count of rate control stats per layer (for non-key).
             if (!(pkt->data.frame.flags & AOM_FRAME_IS_KEY)) {
@@ -1649,6 +1754,9 @@ int main(int argc, const char **argv) {
               if (slx == 0) ++rc.layer_enc_frames[layer_id.temporal_layer_id];
             }
 
+            if (rc_api) {
+              rc_api->PostEncodeUpdate(pkt->data.frame.sz);
+            }
             // Update for short-time encoding bitrate states, for moving window
             // of size rc->window, shifted by rc->window / 2.
             // Ignore first window segment, due to key frame.
@@ -1682,8 +1790,10 @@ int main(int argc, const char **argv) {
 
 #if CONFIG_AV1_DECODER
             if (app_input.decode) {
-              if (aom_codec_decode(&decoder, pkt->data.frame.buf,
-                                   pkt->data.frame.sz, NULL))
+              if (aom_codec_decode(
+                      &decoder,
+                      reinterpret_cast<const uint8_t *>(pkt->data.frame.buf),
+                      pkt->data.frame.sz, NULL))
                 die_codec(&decoder, "Failed to decode frame");
             }
 #endif
