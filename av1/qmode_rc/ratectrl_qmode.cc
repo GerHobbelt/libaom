@@ -166,20 +166,20 @@ void ConstructGopMultiLayer(GopStruct *gop_struct,
 }
 
 GopStruct ConstructGop(RefFrameManager *ref_frame_manager, int show_frame_count,
-                       bool has_key_frame, int global_coding_idx_offset,
-                       int global_order_idx_offset) {
+                       bool has_key_frame, bool has_arf_frame,
+                       bool use_prev_arf, int global_coding_idx_offset,
+                       int global_order_idx_offset, double base_q_ratio) {
+  const int arf_depth = 0;
+
   GopStruct gop_struct;
   gop_struct.show_frame_count = show_frame_count;
   gop_struct.global_coding_idx_offset = global_coding_idx_offset;
   gop_struct.global_order_idx_offset = global_order_idx_offset;
+  gop_struct.base_q_ratio = base_q_ratio;
   int order_start = 0;
   int order_end = show_frame_count - 1;
 
-  // TODO(jingning): Re-enable the use of pyramid coding structure.
-  bool has_arf_frame = show_frame_count > kMinIntervalToAddArf;
-
   gop_struct.display_tracker = 0;
-  gop_struct.base_q_ratio = 1.0;
 
   GopFrame gop_frame;
   if (has_key_frame) {
@@ -193,9 +193,19 @@ GopStruct ConstructGop(RefFrameManager *ref_frame_manager, int show_frame_count,
     gop_struct.gop_frame_list.push_back(gop_frame);
     order_start++;
     ++gop_struct.display_tracker;
+  } else if (!use_prev_arf) {
+    // If we don't use the previous ARF or if it does not exist, add a golden
+    // frame first.
+    gop_frame = GopFrameBasic(
+        global_coding_idx_offset, global_order_idx_offset,
+        static_cast<int>(gop_struct.gop_frame_list.size()), order_start,
+        arf_depth, gop_struct.display_tracker, GopFrameType::kRegularGolden);
+    ref_frame_manager->UpdateRefFrameTable(&gop_frame);
+    gop_struct.gop_frame_list.push_back(gop_frame);
+    order_start++;
+    ++gop_struct.display_tracker;
   }
 
-  const int arf_depth = 0;
   if (has_arf_frame) {
     // Use multi-layer pyrmaid coding structure.
     gop_frame = GopFrameBasic(
@@ -881,6 +891,15 @@ StatusOr<GopStructList> AV1RateControlQMode::DetermineGopInfo(
   const FirstpassInfo analyzed_fp_info =
       AnalyzeFpStats(std::move(firstpass_info));
 
+  // Calculate the average coded error of the whole sequence
+  double global_avg_coded_error = 0.0;
+  for (int i = 0; i < stats_size; ++i) {
+    global_avg_coded_error +=
+        log(1.0 + std::min(analyzed_fp_info.stats_list[i].coded_error,
+                           analyzed_fp_info.stats_list[i].sr_coded_error));
+  }
+  global_avg_coded_error /= static_cast<double>(stats_size);
+
   int global_coding_idx_offset = 0;
   int global_order_idx_offset = 0;
   std::vector<int> key_frame_list = GetKeyFrameList(analyzed_fp_info);
@@ -897,44 +916,38 @@ StatusOr<GopStructList> AV1RateControlQMode::DetermineGopInfo(
     std::vector<int> gf_intervals = PartitionGopIntervals(
         rc_param_, analyzed_fp_info.stats_list, regions_list, key_order_index,
         /*frames_since_key=*/0, frames_to_key);
+    bool use_prev_arf = false;
     for (size_t gi = 0; gi < gf_intervals.size(); ++gi) {
       const bool has_key_frame = gi == 0;
       const int show_frame_count = gf_intervals[gi];
+      const bool has_arf_frame = show_frame_count > kMinIntervalToAddArf;
+
+      // Calculate the average coded error in the GOP to determine base_q_ratio
+      double gop_avg_coded_error = 0.0;
+      for (int i = global_order_idx_offset;
+           i < global_order_idx_offset + show_frame_count; ++i) {
+        gop_avg_coded_error +=
+            log(1.0 + std::min(analyzed_fp_info.stats_list[i].coded_error,
+                               analyzed_fp_info.stats_list[i].sr_coded_error));
+      }
+      gop_avg_coded_error /=
+          std::max(static_cast<double>(show_frame_count), 1.0);
+      double base_q_ratio =
+          fabs(global_avg_coded_error - gop_avg_coded_error) < 0.001
+              ? 1.0
+              : exp((global_avg_coded_error - gop_avg_coded_error) * 2.0);
+
       GopStruct gop =
           ConstructGop(&ref_frame_manager, show_frame_count, has_key_frame,
-                       global_coding_idx_offset, global_order_idx_offset);
+                       has_arf_frame, use_prev_arf, global_coding_idx_offset,
+                       global_order_idx_offset, base_q_ratio);
       assert(gop.show_frame_count == show_frame_count);
       global_coding_idx_offset += static_cast<int>(gop.gop_frame_list.size());
       global_order_idx_offset += gop.show_frame_count;
       gop_list.push_back(gop);
+      // If there's no arf in this GOP, note it down for the next GOP
+      use_prev_arf = has_arf_frame;
     }
-  }
-
-  // Determine the qp adjustment ratio for this gop.
-  double global_avg_coded_error = 0.0;
-  for (int i = 0; i < stats_size; ++i) {
-    global_avg_coded_error +=
-        log(1.0 + std::min(analyzed_fp_info.stats_list[i].coded_error,
-                           analyzed_fp_info.stats_list[i].sr_coded_error));
-  }
-  global_avg_coded_error /= static_cast<double>(stats_size);
-
-  for (auto &gop_struct : gop_list) {
-    double gop_avg_coded_error = 0.0;
-    for (int i = gop_struct.global_order_idx_offset;
-         i < gop_struct.global_order_idx_offset + gop_struct.show_frame_count;
-         ++i) {
-      gop_avg_coded_error +=
-          log(1.0 + std::min(analyzed_fp_info.stats_list[i].coded_error,
-                             analyzed_fp_info.stats_list[i].sr_coded_error));
-    }
-    gop_avg_coded_error /=
-        std::max(static_cast<double>(gop_struct.show_frame_count), 1.0);
-
-    gop_struct.base_q_ratio =
-        fabs(global_avg_coded_error - gop_avg_coded_error) < 0.001
-            ? 1.0
-            : exp((global_avg_coded_error - gop_avg_coded_error) * 2.0);
   }
   return gop_list;
 }
@@ -974,7 +987,7 @@ TplUnitDepStats TplBlockStatsToDepStats(const TplBlockStats &block_stats,
   // In rare case, inter_cost may be greater than intra_cost.
   // If so, we need to modify inter_cost such that inter_cost <= intra_cost
   // because it is required by GetPropagationFraction()
-  if (block_stats.ref_frame_index[0] >= 0)
+  if (block_stats.ref_frame_index[0] != kNoRefFrame)
     dep_stats.inter_cost = std::min(dep_stats.intra_cost, dep_stats.inter_cost);
   else
     dep_stats.inter_cost = dep_stats.intra_cost;
@@ -1041,7 +1054,6 @@ Status ValidateTplStats(const GopStruct &gop_struct,
   }
   return { AOM_CODEC_OK, "" };
 }
-}  // namespace
 
 Status FillTplUnitDepStats(
     std::vector<std::vector<TplUnitDepStats>> &unit_stats,
@@ -1078,6 +1090,7 @@ Status FillTplUnitDepStats(
   }
   return { AOM_CODEC_OK, "" };
 }
+}  // namespace
 
 StatusOr<TplFrameDepStats> CreateTplFrameDepStatsWithoutPropagation(
     const TplFrameStats &frame_stats) {
@@ -1088,6 +1101,7 @@ StatusOr<TplFrameDepStats> CreateTplFrameDepStatsWithoutPropagation(
   TplFrameDepStats frame_dep_stats = CreateTplFrameDepStats(
       frame_stats.frame_height, frame_stats.frame_width, min_block_size,
       !frame_stats.alternate_block_stats_list.empty());
+  frame_dep_stats.ref_frame_indices = frame_stats.ref_frame_indices;
 
   Status status = FillTplUnitDepStats(frame_dep_stats.unit_stats, frame_stats,
                                       frame_stats.block_stats_list);
@@ -1106,14 +1120,21 @@ StatusOr<TplFrameDepStats> CreateTplFrameDepStatsWithoutPropagation(
   return frame_dep_stats;
 }
 
-int GetRefCodingIdxList(const TplUnitDepStats &unit_dep_stats,
+int GetRefCodingIdxList(const TplFrameDepStats &frame_dep_stats,
+                        const TplUnitDepStats &unit_dep_stats,
                         const RefFrameTable &ref_frame_table,
                         int *ref_coding_idx_list) {
   int ref_frame_count = 0;
   for (int i = 0; i < kBlockRefCount; ++i) {
     ref_coding_idx_list[i] = -1;
     int ref_frame_index = unit_dep_stats.ref_frame_index[i];
-    if (ref_frame_index != -1) {
+    if (ref_frame_index == kUnknownRefFrame) {
+      // Preserve existing behavior for now: if the ref for the block is
+      // unknown, assume that it's the first ref for the frame.
+      assert(!frame_dep_stats.ref_frame_indices.empty());
+      ref_frame_index = frame_dep_stats.ref_frame_indices.front();
+    }
+    if (ref_frame_index != kNoRefFrame) {
       assert(ref_frame_index < static_cast<int>(ref_frame_table.size()));
       ref_coding_idx_list[i] = ref_frame_table[ref_frame_index].coding_idx;
       ref_frame_count++;
@@ -1203,8 +1224,9 @@ void TplFrameDepStatsBackTrace(int coding_idx, GopFrameType update_type,
           frame_dep_stats->alt_unit_stats[unit_row][unit_col];
 
       int ref_coding_idx_list[kBlockRefCount] = { -1, -1 };
-      int ref_frame_count = GetRefCodingIdxList(
-          alt_unit_dep_stats, ref_frame_table, ref_coding_idx_list);
+      int ref_frame_count =
+          GetRefCodingIdxList(*frame_dep_stats, alt_unit_dep_stats,
+                              ref_frame_table, ref_coding_idx_list);
       if (ref_frame_count == 0) continue;
       MotionVector base_mv[2] = { alt_unit_dep_stats.mv[0],
                                   alt_unit_dep_stats.mv[1] };
@@ -1278,8 +1300,9 @@ void TplFrameDepStatsPropagate(int coding_idx,
       TplUnitDepStats &unit_dep_stats =
           frame_dep_stats->unit_stats[unit_row][unit_col];
       int ref_coding_idx_list[kBlockRefCount] = { -1, -1 };
-      int ref_frame_count = GetRefCodingIdxList(unit_dep_stats, ref_frame_table,
-                                                ref_coding_idx_list);
+      int ref_frame_count =
+          GetRefCodingIdxList(*frame_dep_stats, unit_dep_stats, ref_frame_table,
+                              ref_coding_idx_list);
       if (ref_frame_count == 0) continue;
       for (int i = 0; i < kBlockRefCount; ++i) {
         if (ref_coding_idx_list[i] == -1) continue;

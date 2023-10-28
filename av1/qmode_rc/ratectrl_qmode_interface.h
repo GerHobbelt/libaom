@@ -23,6 +23,12 @@ namespace aom {
 
 constexpr int kBlockRefCount = 2;
 
+// For use in TplBlockStats::ref_frame_index:
+// There is no MV.
+constexpr int kNoRefFrame = -1;
+// There is a MV, but it's not known which reference frame was used.
+constexpr int kUnknownRefFrame = -2;
+
 struct MotionVector {
   int16_t row;  // row offset in pixels
   int16_t col;  // column offset in pixels
@@ -61,24 +67,6 @@ struct RateControlParam {
   TplPassCount tpl_pass_count = TplPassCount::kOneTplPass;
   // Current TPL pass number, 0 or 1 (for GetTplPassGopEncodeInfo).
   int tpl_pass_index = 0;
-};
-
-struct TplBlockStats {
-  int16_t height;      // Pixel height.
-  int16_t width;       // Pixel width.
-  int16_t row;         // Pixel row of the top left corner.
-  int16_t col;         // Pixel col of the top left corner.
-  int64_t intra_cost;  // Rd cost of the best intra mode.
-  int64_t inter_cost;  // Rd cost of the best inter mode.
-
-  // Valid only if TplFrameStats::rate_dist_present is true:
-  int64_t recrf_rate;      // Bits when using recon as reference.
-  int64_t recrf_dist;      // Distortion when using recon as reference.
-  int64_t intra_pred_err;  // Prediction residual of the intra mode.
-  int64_t inter_pred_err;  // Prediction residual of the inter mode.
-
-  std::array<MotionVector, kBlockRefCount> mv;
-  std::array<int, kBlockRefCount> ref_frame_index;
 };
 
 // gop frame type used for facilitate setting up GopFrame
@@ -281,6 +269,28 @@ struct GopEncodeInfo {
   RefFrameTable final_snapshot;  // RefFrameTable snapshot after coding this GOP
 };
 
+struct TplBlockStats {
+  int16_t height;      // Pixel height.
+  int16_t width;       // Pixel width.
+  int16_t row;         // Pixel row of the top left corner.
+  int16_t col;         // Pixel col of the top left corner.
+  int64_t intra_cost;  // Rd cost of the best intra mode.
+  int64_t inter_cost;  // Rd cost of the best inter mode.
+
+  // Valid only if TplFrameStats::rate_dist_present is true:
+  int64_t recrf_rate;      // Bits when using recon as reference.
+  int64_t recrf_dist;      // Distortion when using recon as reference.
+  int64_t intra_pred_err;  // Prediction residual of the intra mode.
+  int64_t inter_pred_err;  // Prediction residual of the inter mode.
+
+  std::array<MotionVector, kBlockRefCount> mv;
+  // Each entry is one of the following:
+  // - A nonnegative index into the RefFrameTable.
+  // - kNoRefFrameIndex: there is no motion vector.
+  // - kUnknownRefFrameIndex: the reference frame for this MV is unknown.
+  std::array<int, kBlockRefCount> ref_frame_index;
+};
+
 struct TplFrameStats {
   int min_block_size;
   int frame_width;
@@ -290,6 +300,9 @@ struct TplFrameStats {
   // Optional stats computed with different settings, should be empty unless
   // tpl_pass_count == kTwoTplPasses.
   std::vector<TplBlockStats> alternate_block_stats_list;
+  // Indices of all reference frames available to the encoder when encoding
+  // this frame.
+  std::vector<int> ref_frame_indices;
 };
 
 struct TplGopStats {
