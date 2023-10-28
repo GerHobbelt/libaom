@@ -1698,7 +1698,12 @@ void av1_remove_compressor(AV1_COMP *cpi) {
   av1_denoiser_free(&(cpi->denoiser));
 #endif
 
-  aom_free(cm->error);
+  if (cm->error) {
+    // Help detect use after free of the error detail string.
+    memset(cm->error->detail, 'A', sizeof(cm->error->detail) - 1);
+    cm->error->detail[sizeof(cm->error->detail) - 1] = '\0';
+    aom_free(cm->error);
+  }
   aom_free(cpi->td.tctx);
   MultiThreadInfo *const mt_info = &cpi->mt_info;
 #if CONFIG_MULTITHREAD
@@ -3763,7 +3768,7 @@ static int encode_frame_to_data_rate(AV1_COMP *cpi, size_t *size,
     if (av1_set_saliency_map(cpi) == 0) {
       return AOM_CODEC_MEM_ERROR;
     }
-#if !CONFIG_REALTIME_ONLY && !REVERT_NEW_FIRSTPASS_STATS
+#if !CONFIG_REALTIME_ONLY
     double motion_ratio = av1_setup_motion_ratio(cpi);
 #else
     double motion_ratio = 1.0;

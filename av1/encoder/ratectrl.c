@@ -499,7 +499,7 @@ static int adjust_q_cbr(const AV1_COMP *cpi, int q, int active_worst_quality,
       max_delta_down = AOMMIN(16, AOMMAX(1, rc->q_1_frame / 8));
     }
     if (!cpi->ppi->use_svc && cpi->is_screen_content_type) {
-      // Link max_delta_up linked to max_delta_down and buffer status.
+      // Link max_delta_up to max_delta_down and buffer status.
       if (p_rc->buffer_level > p_rc->optimal_buffer_level) {
         max_delta_up = AOMMAX(4, max_delta_down);
       } else {
@@ -511,7 +511,8 @@ static int adjust_q_cbr(const AV1_COMP *cpi, int q, int active_worst_quality,
                          ? AOMMIN(8, AOMMAX(1, rc->q_1_frame / 16))
                          : AOMMIN(16, AOMMAX(1, rc->q_1_frame / 8));
   }
-
+  if (cpi->svc.number_temporal_layers > 1 && cpi->svc.temporal_layer_id == 0)
+    max_delta_up = AOMMIN(max_delta_up, 14);
   // If resolution changes or avg_frame_bandwidth significantly changed,
   // then set this flag to indicate change in target bits per macroblock.
   const int change_target_bits_mb =

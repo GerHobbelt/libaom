@@ -31,7 +31,6 @@
 #include "common/video_writer.h"
 #include "examples/encoder_util.h"
 #include "aom_ports/aom_timer.h"
-#include "aom_ports/bitops.h"
 
 #define OPTION_BUFFER_SIZE 1024
 
@@ -727,9 +726,11 @@ static void set_layer_pattern(
         // No updates on layer 1, reference LAST (TL0).
         ref_frame_config->reference[SVC_LAST_FRAME] = 1;
       }
-      // Always reference golden and altref
-      ref_frame_config->reference[SVC_GOLDEN_FRAME] = 1;
-      ref_frame_config->reference[SVC_ALTREF_FRAME] = 1;
+      // Always reference golden and altref on TL0.
+      if (layer_id->temporal_layer_id == 0) {
+        ref_frame_config->reference[SVC_GOLDEN_FRAME] = 1;
+        ref_frame_config->reference[SVC_ALTREF_FRAME] = 1;
+      }
       break;
     case 2:
       // 3-temporal layer:
@@ -1136,13 +1137,14 @@ static void set_layer_pattern(
 }
 
 #if CONFIG_AV1_DECODER
-static void test_decode(aom_codec_ctx_t *encoder, aom_codec_ctx_t *decoder,
-                        const int frames_out, int *mismatch_seen) {
+// Returns whether there is a mismatch between the encoder's new frame and the
+// decoder's new frame.
+static int test_decode(aom_codec_ctx_t *encoder, aom_codec_ctx_t *decoder,
+                       const int frames_out) {
   aom_image_t enc_img, dec_img;
+  int mismatch = 0;
 
-  if (*mismatch_seen) return;
-
-  /* Get the internal reference frame */
+  /* Get the internal new frame */
   AOM_CODEC_CONTROL_TYPECHECKED(encoder, AV1_GET_NEW_FRAME_IMAGE, &enc_img);
   AOM_CODEC_CONTROL_TYPECHECKED(decoder, AV1_GET_NEW_FRAME_IMAGE, &dec_img);
 
@@ -1184,11 +1186,12 @@ static void test_decode(aom_codec_ctx_t *encoder, aom_codec_ctx_t *decoder,
             " V[%d, %d] {%d/%d}\n",
             frames_out, y[0], y[1], y[2], y[3], u[0], u[1], u[2], u[3], v[0],
             v[1], v[2], v[3]);
-    *mismatch_seen = frames_out;
+    mismatch = 1;
   }
 
   aom_img_free(&enc_img);
   aom_img_free(&dec_img);
+  return mismatch;
 }
 #endif  // CONFIG_AV1_DECODER
 
@@ -1371,12 +1374,12 @@ int main(int argc, const char **argv) {
   if (aom_codec_enc_init(
           &codec, encoder, &cfg,
           cfg.g_input_bit_depth == AOM_BITS_8 ? 0 : AOM_CODEC_USE_HIGHBITDEPTH))
-    die("Failed to initialize encoder");
+    die_codec(&codec, "Failed to initialize encoder");
 
 #if CONFIG_AV1_DECODER
   if (app_input.decode) {
     if (aom_codec_dec_init(&decoder, get_aom_decoder_by_index(0), NULL, 0))
-      die("Failed to initialize decoder");
+      die_codec(&decoder, "Failed to initialize decoder");
   }
 #endif
 
@@ -1405,7 +1408,7 @@ int main(int argc, const char **argv) {
   aom_codec_control(&codec, AV1E_SET_INTRA_DEFAULT_TX_ONLY, 1);
 
   aom_codec_control(&codec, AV1E_SET_TILE_COLUMNS,
-                    cfg.g_threads ? get_msb(cfg.g_threads) : 0);
+                    cfg.g_threads ? (int)log2(cfg.g_threads) : 0);
   if (cfg.g_threads > 1) aom_codec_control(&codec, AV1E_SET_ROW_MT, 1);
 
   aom_codec_control(&codec, AV1E_SET_TUNE_CONTENT, app_input.tune_content);
@@ -1666,15 +1669,13 @@ int main(int argc, const char **argv) {
         if ((ss_number_layers > 1 || ts_number_layers > 1) &&
             !(layer_id.temporal_layer_id > 0 &&
               layer_id.temporal_layer_id == (int)ts_number_layers - 1)) {
-          int mismatch_seen = 0;
-          test_decode(&codec, &decoder, frame_cnt, &mismatch_seen);
-          if (mismatch_seen) {
+          if (test_decode(&codec, &decoder, frame_cnt)) {
 #if CONFIG_INTERNAL_STATS
             fprintf(stats_file, "First mismatch occurred in frame %d\n",
-                    mismatch_seen);
+                    frame_cnt);
             fclose(stats_file);
 #endif
-            die("Mismatch seen");
+            fatal("Mismatch seen");
           }
         }
       }
@@ -1703,7 +1704,7 @@ int main(int argc, const char **argv) {
          frame_cnt, 1000 * (float)cx_time / (double)(frame_cnt * 1000000),
          1000000 * (double)frame_cnt / (double)cx_time);
 
-  if (aom_codec_destroy(&codec)) die_codec(&codec, "Failed to destroy codec");
+  if (aom_codec_destroy(&codec)) die_codec(&codec, "Failed to destroy encoder");
 
 #if CONFIG_AV1_DECODER
   if (app_input.decode) {
