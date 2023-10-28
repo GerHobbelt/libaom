@@ -80,7 +80,6 @@ static INLINE void update_search_state_nonrd(
     TxfmSearchInfo *txfm_info, RD_STATS *nonskip_rdc, PICK_MODE_CONTEXT *ctx,
     PREDICTION_MODE this_best_mode, const int64_t sse_y) {
   BEST_PICKMODE *const best_pickmode = &search_state->best_pickmode;
-  const int num_8x8_blocks = ctx->num_4x4_blk / 4;
 
   best_pickmode->best_sse = sse_y;
   best_pickmode->best_mode = this_best_mode;
@@ -96,7 +95,7 @@ static INLINE void update_search_state_nonrd(
       (nonskip_rdc->rate == INT_MAX && search_state->this_rdc.skip_txfm);
   if (!best_pickmode->best_mode_skip_txfm) {
     memcpy(best_pickmode->blk_skip, txfm_info->blk_skip,
-           sizeof(txfm_info->blk_skip[0]) * num_8x8_blocks);
+           sizeof(txfm_info->blk_skip[0]) * ctx->num_4x4_blk);
   }
 }
 
@@ -2737,8 +2736,8 @@ static AOM_FORCE_INLINE bool handle_inter_mode_nonrd(
     aom_usec_timer_start(&x->ms_stat_nonrd.timer2);
 #endif
     // Calculates RD Cost using Hadamard transform.
-    av1_block_yrd(x, &search_state->this_rdc, &is_skippable, bsize, mi->tx_size,
-                  1);
+    av1_block_yrd(x, &search_state->this_rdc, &is_skippable, bsize,
+                  mi->tx_size);
     if (search_state->this_rdc.skip_txfm ||
         RDCOST(x->rdmult, search_state->this_rdc.rate,
                search_state->this_rdc.dist) >=
@@ -2904,11 +2903,8 @@ static AOM_FORCE_INLINE void handle_screen_content_mode_nonrd(
   MACROBLOCKD *const xd = &x->e_mbd;
   MB_MODE_INFO *const mi = xd->mi[0];
   struct macroblockd_plane *const pd = &xd->plane[0];
-  const int mi_row = xd->mi_row;
-  const int mi_col = xd->mi_col;
   const int bw = block_size_wide[bsize];
   const int bh = block_size_high[bsize];
-  const int num_8x8_blocks = ctx->num_4x4_blk / 4;
   TxfmSearchInfo *txfm_info = &x->txfm_search_info;
   BEST_PICKMODE *const best_pickmode = &search_state->best_pickmode;
 
@@ -2920,6 +2916,7 @@ static AOM_FORCE_INLINE void handle_screen_content_mode_nonrd(
       cpi->oxcf.tune_cfg.content == AOM_CONTENT_SCREEN && !skip_idtx_palette &&
       !cpi->oxcf.txfm_cfg.use_inter_dct_only && !x->force_zeromv_skip_for_blk &&
       is_inter_mode(best_pickmode->best_mode) &&
+      best_pickmode->best_pred != NULL &&
       (!rt_sf->prune_idtx_nonrd ||
        (rt_sf->prune_idtx_nonrd && bsize <= BLOCK_32X32 &&
         best_pickmode->best_mode_skip_txfm != 1 && x->source_variance > 200))) {
@@ -2929,12 +2926,9 @@ static AOM_FORCE_INLINE void handle_screen_content_mode_nonrd(
     this_mode_pred = &tmp_buffer[get_pred_buffer(tmp_buffer, 3)];
     pd->dst.buf = this_mode_pred->data;
     pd->dst.stride = bw;
-
-    // Build inter predicted samples and compute RD cost using Identity
-    // transform.
-    av1_enc_build_inter_predictor(cm, xd, mi_row, mi_col, NULL, bsize,
-                                  AOM_PLANE_Y, AOM_PLANE_Y);
-    av1_block_yrd_idtx(x, &idtx_rdc, &is_skippable, bsize, mi->tx_size);
+    const PRED_BUFFER *const best_pred = best_pickmode->best_pred;
+    av1_block_yrd_idtx(x, best_pred->data, best_pred->stride, &idtx_rdc,
+                       &is_skippable, bsize, mi->tx_size);
     int64_t idx_rdcost = RDCOST(x->rdmult, idtx_rdc.rate, idtx_rdc.dist);
     if (idx_rdcost < search_state->best_rdc.rdcost) {
       // Keep the skip_txfm off if the color_sensitivity is set.
@@ -2946,7 +2940,7 @@ static AOM_FORCE_INLINE void handle_screen_content_mode_nonrd(
       best_pickmode->best_mode_skip_txfm = idtx_rdc.skip_txfm;
       if (!idtx_rdc.skip_txfm) {
         memcpy(best_pickmode->blk_skip, txfm_info->blk_skip,
-               sizeof(txfm_info->blk_skip[0]) * num_8x8_blocks);
+               sizeof(txfm_info->blk_skip[0]) * ctx->num_4x4_blk);
       }
       xd->tx_type_map[0] = best_pickmode->tx_type;
       memset(ctx->tx_type_map, best_pickmode->tx_type, ctx->num_4x4_blk);
@@ -3060,7 +3054,6 @@ void av1_nonrd_pick_inter_mode_sb(AV1_COMP *cpi, TileDataEnc *tile_data,
   const int bh = block_size_high[bsize];
   const int bw = block_size_wide[bsize];
   const int pixels_in_block = bh * bw;
-  const int num_8x8_blocks = ctx->num_4x4_blk / 4;
   struct buf_2d orig_dst = pd->dst;
   const TxfmSearchParams *txfm_params = &x->txfm_search_params;
   TxfmSearchInfo *txfm_info = &x->txfm_search_info;
@@ -3180,6 +3173,9 @@ void av1_nonrd_pick_inter_mode_sb(AV1_COMP *cpi, TileDataEnc *tile_data,
   inter_pred_params_sr.conv_params =
       get_conv_params(/*do_average=*/0, AOM_PLANE_Y, xd->bd);
 
+  memset(txfm_info->blk_skip, 0,
+         sizeof(txfm_info->blk_skip[0]) * ctx->num_4x4_blk);
+
   for (int idx = 0; idx < num_inter_modes + tot_num_comp_modes; ++idx) {
     // If we are at the first compound mode, and the single modes already
     // perform well, then end the search.
@@ -3211,8 +3207,6 @@ void av1_nonrd_pick_inter_mode_sb(AV1_COMP *cpi, TileDataEnc *tile_data,
     mi->ref_frame[0] = ref_frame;
     mi->ref_frame[1] = ref_frame2;
     set_ref_ptrs(cm, xd, ref_frame, ref_frame2);
-    memset(txfm_info->blk_skip, 0,
-           sizeof(txfm_info->blk_skip[0]) * num_8x8_blocks);
 
     // Perform inter mode evaluation for non-rd
     if (!handle_inter_mode_nonrd(
@@ -3317,14 +3311,22 @@ void av1_nonrd_pick_inter_mode_sb(AV1_COMP *cpi, TileDataEnc *tile_data,
   mi->mode = best_pickmode->best_mode;
   mi->ref_frame[0] = best_pickmode->best_ref_frame;
   mi->ref_frame[1] = best_pickmode->best_second_ref_frame;
-  txfm_info->skip_txfm = best_pickmode->best_mode_skip_txfm;
-  if (!txfm_info->skip_txfm) {
-    // For inter modes: copy blk_skip from best_pickmode, which is
-    // defined for 8x8 blocks. If palette or intra mode was selected
-    // as best then blk_skip is already copied into the ctx.
-    if (best_pickmode->best_mode >= INTRA_MODE_END)
-      memcpy(ctx->blk_skip, best_pickmode->blk_skip,
-             sizeof(best_pickmode->blk_skip[0]) * num_8x8_blocks);
+  // For lossless/Q=0: always force the skip flags off.
+  if (cm->quant_params.base_qindex == 0) {
+    txfm_info->skip_txfm = 0;
+    memset(ctx->blk_skip, 0, sizeof(ctx->blk_skip[0]) * ctx->num_4x4_blk);
+  } else {
+    txfm_info->skip_txfm = best_pickmode->best_mode_skip_txfm;
+    if (!txfm_info->skip_txfm) {
+      // For inter modes: copy blk_skip from best_pickmode.
+      // If palette or intra mode was selected as best then
+      // blk_skip is already copied into the ctx.
+      // TODO(marpan): Look into removing blk_skip from best_pickmode
+      // and just copy directly into the ctx for inter.
+      if (best_pickmode->best_mode >= INTRA_MODE_END)
+        memcpy(ctx->blk_skip, best_pickmode->blk_skip,
+               sizeof(best_pickmode->blk_skip[0]) * ctx->num_4x4_blk);
+    }
   }
   if (has_second_ref(mi)) {
     mi->comp_group_idx = 0;

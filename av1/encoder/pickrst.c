@@ -1141,8 +1141,8 @@ static AOM_INLINE void update_a_sep_sym(int wiener_win, int64_t **Mc,
     for (j = 0; j < wiener_win; j++) {
       int k, l;
       for (k = 0; k < wiener_win; ++k) {
+        const int kk = wrap_index(k, wiener_win);
         for (l = 0; l < wiener_win; ++l) {
-          const int kk = wrap_index(k, wiener_win);
           const int ll = wrap_index(l, wiener_win);
           B[ll * wiener_halfwin1 + kk] +=
               Hc[j * wiener_win + i][k * wiener_win2 + l] * b[i] /
@@ -1197,16 +1197,43 @@ static AOM_INLINE void update_b_sep_sym(int wiener_win, int64_t **Mc,
     }
   }
 
+  // b/272139363: The computation,
+  //   Hc[i * wiener_win + j][k * wiener_win2 + l] * a[k] /
+  //          WIENER_TAP_SCALE_FACTOR * a[l] / WIENER_TAP_SCALE_FACTOR;
+  // may generate a signed-integer-overflow. Conditionally scale the terms to
+  // avoid a potential overflow.
+  //
+  // Hc contains accumulated correlation statistics and it is desired to leave
+  // as much room as possible for Hc. It was experimentally observed that the
+  // primary issue manifests itself with the second, a[l], multiply. For
+  // max_a_l < WIENER_TAP_SCALE_FACTOR the first multiply with a[k] should not
+  // increase dynamic range and the second multiply should hence be safe.
+  // Thereafter a safe scale_threshold depends on the actual operational range
+  // of Hc. The largest scale_threshold is expected to depend on bit-depth
+  // (av1_compute_stats_highbd_c() scales highbd to 8-bit) and maximum
+  // restoration-unit size (256), leading up to 32-bit positive numbers in Hc.
+  // Noting that the caller, wiener_decompose_sep_sym(), initializes a[...]
+  // to a range smaller than 16 bits, the scale_threshold is set as below for
+  // convenience.
+  int32_t max_a_l = 0;
+  for (int l = 0; l < wiener_win; ++l) {
+    const int32_t abs_a_l = abs(a[l]);
+    if (abs_a_l > max_a_l) max_a_l = abs_a_l;
+  }
+  const int scale_threshold = 128 * WIENER_TAP_SCALE_FACTOR;
+  const int scaler = max_a_l < scale_threshold ? 1 : 4;
+
   for (i = 0; i < wiener_win; i++) {
+    const int ii = wrap_index(i, wiener_win);
     for (j = 0; j < wiener_win; j++) {
-      const int ii = wrap_index(i, wiener_win);
       const int jj = wrap_index(j, wiener_win);
       int k, l;
       for (k = 0; k < wiener_win; ++k) {
         for (l = 0; l < wiener_win; ++l) {
           B[jj * wiener_halfwin1 + ii] +=
               Hc[i * wiener_win + j][k * wiener_win2 + l] * a[k] /
-              WIENER_TAP_SCALE_FACTOR * a[l] / WIENER_TAP_SCALE_FACTOR;
+              (scaler * WIENER_TAP_SCALE_FACTOR) * a[l] /
+              (WIENER_TAP_SCALE_FACTOR / scaler);
         }
       }
     }
