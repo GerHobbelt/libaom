@@ -1134,6 +1134,7 @@ static AOM_INLINE void encode_sb_row(AV1_COMP *cpi, ThreadData *td,
     // Reset color coding related parameters
     av1_zero(x->color_sensitivity_sb);
     av1_zero(x->color_sensitivity_sb_g);
+    av1_zero(x->color_sensitivity_sb_alt);
     av1_zero(x->color_sensitivity);
     x->content_state_sb.source_sad_nonrd = kMedSad;
     x->content_state_sb.source_sad_rd = kMedSad;
@@ -2212,7 +2213,6 @@ void av1_encode_frame(AV1_COMP *cpi) {
   AV1_COMMON *const cm = &cpi->common;
   CurrentFrame *const current_frame = &cm->current_frame;
   FeatureFlags *const features = &cm->features;
-  const int num_planes = av1_num_planes(cm);
   RD_COUNTS *const rdc = &cpi->td.rd_counts;
   const AV1EncoderConfig *const oxcf = &cpi->oxcf;
   // Indicates whether or not to use a default reduced set for ext-tx
@@ -2257,9 +2257,7 @@ void av1_encode_frame(AV1_COMP *cpi) {
 #endif  // !defined(NDEBUG) && !CONFIG_REALTIME_ONLY
 
 #if CONFIG_MISMATCH_DEBUG
-  mismatch_reset_frame(num_planes);
-#else
-  (void)num_planes;
+  mismatch_reset_frame(av1_num_planes(cm));
 #endif
 
   rdc->newmv_or_intra_blocks = 0;
