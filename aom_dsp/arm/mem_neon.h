@@ -94,6 +94,13 @@ static INLINE uint8x16_t load_u8_8x2(const uint8_t *s, ptrdiff_t p) {
         vld1_lane_u32((uint32_t *)(s), vreinterpret_u32_u8(*(s0)), lane)); \
   } while (0)
 
+// Load four bytes into the low half of a uint8x8_t, zero the upper half.
+static INLINE uint8x8_t load_u8_4x1_lane0(const uint8_t *p) {
+  uint8x8_t ret = vdup_n_u8(0);
+  load_u8_4x1(p, &ret, 0);
+  return ret;
+}
+
 // Load 2 sets of 4 bytes when alignment is guaranteed.
 static INLINE uint8x8_t load_u8(const uint8_t *buf, ptrdiff_t stride) {
   uint32x2_t a = vdup_n_u32(0);
@@ -192,6 +199,13 @@ static INLINE void load_u16_4x7(const uint16_t *s, ptrdiff_t p,
   *s5 = vld1_u16(s);
   s += p;
   *s6 = vld1_u16(s);
+}
+
+static INLINE void load_s16_8x2(const int16_t *s, const ptrdiff_t p,
+                                int16x8_t *const s0, int16x8_t *const s1) {
+  *s0 = vld1q_s16(s);
+  s += p;
+  *s1 = vld1q_s16(s);
 }
 
 static INLINE void load_u16_8x2(const uint16_t *s, const ptrdiff_t p,
