@@ -261,6 +261,7 @@ if(CONFIG_AV1_ENCODER)
               "${AOM_ROOT}/aom_dsp/arm/sadxd_neon.c"
               "${AOM_ROOT}/aom_dsp/arm/sad_neon.c"
               "${AOM_ROOT}/aom_dsp/arm/masked_sad_neon.c"
+              "${AOM_ROOT}/aom_dsp/arm/masked_sad4d_neon.c"
               "${AOM_ROOT}/aom_dsp/arm/subpel_variance_neon.c"
               "${AOM_ROOT}/aom_dsp/arm/variance_neon.c"
               "${AOM_ROOT}/aom_dsp/arm/hadamard_neon.c"
@@ -293,6 +294,7 @@ if(CONFIG_AV1_ENCODER)
                 "${AOM_ROOT}/aom_dsp/arm/highbd_avg_neon.c"
                 "${AOM_ROOT}/aom_dsp/arm/highbd_hadamard_neon.c"
                 "${AOM_ROOT}/aom_dsp/arm/highbd_quantize_neon.c"
+                "${AOM_ROOT}/aom_dsp/arm/highbd_sad_neon.c"
                 "${AOM_ROOT}/aom_dsp/arm/highbd_variance_neon.c")
   endif()
 

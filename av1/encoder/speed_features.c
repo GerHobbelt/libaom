@@ -839,8 +839,6 @@ static void set_good_speed_feature_framesize_dependent(
     }
 
     if (!is_480p_or_larger) {
-      sf->tx_sf.tx_type_search.fast_inter_tx_type_prob_thresh =
-          boosted ? INT_MAX : 250;
       sf->part_sf.partition_search_breakout_dist_thr = (1 << 26);
     }
 
@@ -893,7 +891,8 @@ static void set_good_speed_feature_framesize_dependent(
     }
 
     if (!is_720p_or_larger) {
-      sf->tx_sf.tx_type_search.fast_inter_tx_type_prob_thresh = 150;
+      sf->tx_sf.tx_type_search.fast_inter_tx_type_prob_thresh =
+          is_boosted_arf2_bwd_type ? 450 : 150;
     }
 
     sf->lpf_sf.cdef_pick_method = CDEF_FAST_SEARCH_LVL4;
@@ -919,7 +918,8 @@ static void set_good_speed_features_framesize_independent(
   }
 
   // Speed 0 for all speed features that give neutral coding performance change.
-  sf->gm_sf.gm_search_type = GM_REDUCED_REF_SEARCH_SKIP_L2_L3_ARF2;
+  sf->gm_sf.gm_search_type = boosted ? GM_REDUCED_REF_SEARCH_SKIP_L2_L3_ARF2
+                                     : GM_SEARCH_CLOSEST_REFS_ONLY;
   sf->gm_sf.prune_ref_frame_for_gm_search = boosted ? 0 : 1;
   sf->gm_sf.disable_gm_search_based_on_stats = 1;
 
@@ -1083,6 +1083,7 @@ static void set_good_speed_features_framesize_independent(
   if (speed >= 3) {
     sf->hl_sf.high_precision_mv_usage = CURRENT_Q;
 
+    sf->gm_sf.prune_ref_frame_for_gm_search = 1;
     sf->gm_sf.prune_zero_mv_with_sse = 1;
     sf->gm_sf.num_refinement_steps = 0;
 
