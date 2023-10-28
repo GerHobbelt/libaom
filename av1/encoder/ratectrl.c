@@ -775,8 +775,7 @@ void av1_rc_update_rate_correction_factors(AV1_COMP *cpi, int is_encode_stage,
 
   // Adjustment to delta Q and number of blocks updated in cyclic refressh
   // based on over or under shoot of target in current frame.
-  if (cyclic_refresh_active && (cpi->rc.this_frame_target > 0) &&
-      !cpi->ppi->use_svc) {
+  if (cyclic_refresh_active && cpi->rc.this_frame_target > 0) {
     CYCLIC_REFRESH *const cr = cpi->cyclic_refresh;
     if (correction_factor > 1.25) {
       cr->percent_refresh_adjustment =
@@ -3259,8 +3258,6 @@ void av1_get_one_pass_rt_params(AV1_COMP *cpi, FRAME_TYPE *const frame_type,
   const int layer =
       LAYER_IDS_TO_IDX(svc->spatial_layer_id, svc->temporal_layer_id,
                        svc->number_temporal_layers);
-  // Turn this on to explicitly set the reference structure rather than
-  // relying on internal/default structure.
   if (cpi->ppi->use_svc) {
     av1_update_temporal_layer_framerate(cpi);
     av1_restore_layer_context(cpi);

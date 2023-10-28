@@ -1487,14 +1487,26 @@ enum aome_enc_control_id {
   AV1E_SET_QUANTIZER_ONE_PASS = 159,
 
   /*!\brief Codec control to enable the rate distribution guided delta
-   * quantization in all intra mode. It requires --deltaq-mode=3, also
-   * an input file which contains rate distribution for each 16x16 block,
-   * passed in by --rate-distribution-info=rate_distribution.csv.
+   * quantization in all intra mode, unsigned int parameter
+   *
+   * - 0 = disable (default)
+   * - 1 = enable
+   *
+   * \attention This feature requires --deltaq-mode=3, also an input file
+   *            which contains rate distribution for each 16x16 block,
+   *            passed in by --rate-distribution-info=rate_distribution.txt.
    */
   AV1E_ENABLE_RATE_GUIDE_DELTAQ = 160,
 
   /*!\brief Codec control to set the input file for rate distribution used
-   * in all intra mode. It requires --enable-rate-guide-deltaq=1.
+   * in all intra mode, const char * parameter
+   * The input should be the name of a text file, which
+   * contains (rows x cols) float values separated by space.
+   * Each float value represent the number of bits for each 16x16 block.
+   * rows = (frame_height + 15) / 16
+   * cols = (frame_width + 15) / 16
+   *
+   * \attention This feature requires --enable-rate-guide-deltaq=1.
    */
   AV1E_SET_RATE_DISTRIBUTION_INFO = 161,
 
@@ -1628,7 +1640,13 @@ typedef struct aom_svc_layer_id {
   int temporal_layer_id; /**< Temporal layer ID */
 } aom_svc_layer_id_t;
 
-/*!brief Parameter type for SVC */
+/*!brief Parameter type for SVC
+ *
+ * In the max_quantizers, min_quantizers, and layer_target_bitrate arrays,
+ * the index for spatial layer `sl` and temporal layer `tl` is
+ * sl * number_temporal_layers + tl.
+ *
+ */
 typedef struct aom_svc_params {
   int number_spatial_layers;                 /**< Number of spatial layers */
   int number_temporal_layers;                /**< Number of temporal layers */
@@ -1636,7 +1654,7 @@ typedef struct aom_svc_params {
   int min_quantizers[AOM_MAX_LAYERS];        /**< Min Q for each layer */
   int scaling_factor_num[AOM_MAX_SS_LAYERS]; /**< Scaling factor-numerator */
   int scaling_factor_den[AOM_MAX_SS_LAYERS]; /**< Scaling factor-denominator */
-  /*! Target bitrate for each layer */
+  /*! Target bitrate for each layer, in kilobits per second */
   int layer_target_bitrate[AOM_MAX_LAYERS];
   /*! Frame rate factor for each temporal layer */
   int framerate_factor[AOM_MAX_TS_LAYERS];
