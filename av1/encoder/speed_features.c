@@ -562,6 +562,7 @@ static void set_allintra_speed_features_framesize_independent(
     sf->rt_sf.vbp_prune_16x16_split_using_min_max_sub_blk_var = true;
     sf->rt_sf.prune_h_pred_using_best_mode_so_far = true;
     sf->rt_sf.enable_intra_mode_pruning_using_neighbors = true;
+    sf->rt_sf.prune_intra_mode_using_best_sad_so_far = true;
   }
 
   // As the speed feature prune_chroma_modes_using_luma_winner already
@@ -1183,8 +1184,7 @@ static void set_good_speed_features_framesize_independent(
   }
 
   if (speed >= 5) {
-    // TODO(Ranjit): Enable the optimization for highbd encoding mode
-    sf->hl_sf.weight_calc_level_in_tf = use_hbd ? 0 : 1;
+    sf->hl_sf.weight_calc_level_in_tf = 1;
 
     sf->fp_sf.reduce_mv_step_param = 4;
 
@@ -2137,6 +2137,7 @@ static AOM_INLINE void init_rt_sf(REAL_TIME_SPEED_FEATURES *rt_sf) {
   rt_sf->frame_level_mode_cost_update = false;
   rt_sf->prune_h_pred_using_best_mode_so_far = false;
   rt_sf->enable_intra_mode_pruning_using_neighbors = false;
+  rt_sf->prune_intra_mode_using_best_sad_so_far = false;
   rt_sf->check_only_zero_zeromv_on_large_blocks = false;
   rt_sf->disable_cdf_update_non_reference_frame = false;
   rt_sf->prune_compoundmode_with_singlemode_var = false;
