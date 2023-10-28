@@ -368,16 +368,13 @@ foreach(aom_tgt ${AOM_LIB_TARGETS})
   endif()
 endforeach()
 
-# Generate C/C++ files containing the function usage_exit(). Users of the
+# Generate a C file containing the function usage_exit(). Users of the
 # aom_common_app_util library must define this function. This is a convenience
 # to allow omission of the function from applications that might want to use
 # other pieces of the util support without defining usage_exit().
 file(WRITE "${AOM_GEN_SRC_DIR}/usage_exit.c"
      "#include <stdlib.h>\n\n#include \"common/tools_common.h\"\n\n"
      "void usage_exit(void) { exit(EXIT_FAILURE); }\n")
-file(WRITE "${AOM_GEN_SRC_DIR}/usage_exit.cc"
-     "#include <stdlib.h>\n\n#include \"common/tools_common.h\"\n\n"
-     "extern \"C\" void usage_exit(void) { exit(EXIT_FAILURE); }\n")
 
 #
 # Application and application support targets.
@@ -470,7 +467,7 @@ endif()
 if(CONFIG_LIBYUV OR CONFIG_TUNE_BUTTERAUGLI)
   add_library(yuv OBJECT ${AOM_LIBYUV_SOURCES})
   if(NOT MSVC)
-    target_compile_options(yuv PRIVATE -Wno-unused-parameter)
+    target_compile_options(yuv PRIVATE -Wno-shadow)
   endif()
   include_directories("${AOM_ROOT}/third_party/libyuv/include")
 endif()
@@ -674,7 +671,7 @@ endif()
 
 if(ENABLE_TOOLS)
   if(CONFIG_AV1_DECODER)
-    add_executable(dump_obu "${AOM_GEN_SRC_DIR}/usage_exit.cc"
+    add_executable(dump_obu "${AOM_GEN_SRC_DIR}/usage_exit.c"
                             "${AOM_ROOT}/tools/dump_obu.cc"
                             "${AOM_ROOT}/tools/obu_parser.cc"
                             "${AOM_ROOT}/tools/obu_parser.h"

@@ -347,7 +347,6 @@ static void parse_command_line(int argc, const char **argv_,
           break;
         default:
           die("Error: Invalid bit depth selected (%d)\n", enc_cfg->g_bit_depth);
-          break;
       }
 #endif  // CONFIG_VP9_HIGHBITDEPTH
     } else if (arg_match(&arg, &dropframe_thresh_arg, argi)) {
@@ -803,8 +802,11 @@ static void set_layer_pattern(
       // Every frame can reference GOLDEN AND ALTREF.
       ref_frame_config->reference[SVC_GOLDEN_FRAME] = 1;
       ref_frame_config->reference[SVC_ALTREF_FRAME] = 1;
-      // Allow for compound prediction using LAST and ALTREF.
-      if (speed >= 7) ref_frame_comp_pred->use_comp_pred[2] = 1;
+      // Allow for compound prediction for LAST-ALTREF and LAST-GOLDEN.
+      if (speed >= 7) {
+        ref_frame_comp_pred->use_comp_pred[2] = 1;
+        ref_frame_comp_pred->use_comp_pred[0] = 1;
+      }
       break;
     case 4:
       // 3-temporal layer: but middle layer updates GF, so 2nd TL2 will

@@ -9,6 +9,7 @@
  */
 
 #include <arm_neon.h>
+#include <assert.h>
 
 #include "config/aom_dsp_rtcd.h"
 #include "aom/aom_integer.h"
@@ -17,7 +18,7 @@
 #include "aom_dsp/arm/transpose_neon.h"
 #include "aom_ports/mem.h"
 
-#if !defined(__aarch64__)
+#if !AOM_ARCH_AARCH64
 static INLINE uint32x2_t horizontal_add_u16x8_v(const uint16x8_t a) {
   const uint32x4_t b = vpaddlq_u16(a);
   const uint64x2_t c = vpaddlq_u32(b);
@@ -29,7 +30,7 @@ static INLINE uint32x2_t horizontal_add_u16x8_v(const uint16x8_t a) {
 unsigned int aom_avg_4x4_neon(const uint8_t *a, int a_stride) {
   const uint8x16_t b = load_unaligned_u8q(a, a_stride);
   const uint16x8_t c = vaddl_u8(vget_low_u8(b), vget_high_u8(b));
-#if defined(__aarch64__)
+#if AOM_ARCH_AARCH64
   const uint32_t d = vaddlvq_u16(c);
   return (d + 8) >> 4;
 #else
@@ -52,7 +53,7 @@ unsigned int aom_avg_8x8_neon(const uint8_t *a, int a_stride) {
     sum = vaddw_u8(sum, e);
   }
 
-#if defined(__aarch64__)
+#if AOM_ARCH_AARCH64
   const uint32_t d = vaddlvq_u16(sum);
   return (d + 32) >> 6;
 #else
@@ -92,52 +93,90 @@ int aom_satd_lp_neon(const int16_t *coeff, int length) {
 void aom_int_pro_row_neon(int16_t *hbuf, const uint8_t *ref,
                           const int ref_stride, const int width,
                           const int height, int norm_factor) {
-  const uint8_t *idx = ref;
-  const uint16x8_t zero = vdupq_n_u16(0);
-  const int16x8_t neg_norm_factor = vdupq_n_s16(-norm_factor);
+  assert(width % 16 == 0);
+  assert(height % 4 == 0);
 
-  for (int wd = 0; wd < width; wd += 16) {
-    uint16x8_t vec0 = zero;
-    uint16x8_t vec1 = zero;
-    idx = ref + wd;
-    for (int ht = 0; ht < height; ++ht) {
-      const uint8x16_t tmp = vld1q_u8(idx);
-      idx += ref_stride;
-      vec0 = vaddw_u8(vec0, vget_low_u8(tmp));
-      vec1 = vaddw_u8(vec1, vget_high_u8(tmp));
+  const int16x8_t neg_norm_factor = vdupq_n_s16(-norm_factor);
+  uint16x8_t sum_lo[2], sum_hi[2];
+
+  int w = 0;
+  do {
+    const uint8_t *r = ref + w;
+    uint8x16_t r0 = vld1q_u8(r + 0 * ref_stride);
+    uint8x16_t r1 = vld1q_u8(r + 1 * ref_stride);
+    uint8x16_t r2 = vld1q_u8(r + 2 * ref_stride);
+    uint8x16_t r3 = vld1q_u8(r + 3 * ref_stride);
+
+    sum_lo[0] = vaddl_u8(vget_low_u8(r0), vget_low_u8(r1));
+    sum_hi[0] = vaddl_u8(vget_high_u8(r0), vget_high_u8(r1));
+    sum_lo[1] = vaddl_u8(vget_low_u8(r2), vget_low_u8(r3));
+    sum_hi[1] = vaddl_u8(vget_high_u8(r2), vget_high_u8(r3));
+
+    r += 4 * ref_stride;
+
+    for (int h = height - 4; h != 0; h -= 4) {
+      r0 = vld1q_u8(r + 0 * ref_stride);
+      r1 = vld1q_u8(r + 1 * ref_stride);
+      r2 = vld1q_u8(r + 2 * ref_stride);
+      r3 = vld1q_u8(r + 3 * ref_stride);
+
+      uint16x8_t tmp0_lo = vaddl_u8(vget_low_u8(r0), vget_low_u8(r1));
+      uint16x8_t tmp0_hi = vaddl_u8(vget_high_u8(r0), vget_high_u8(r1));
+      uint16x8_t tmp1_lo = vaddl_u8(vget_low_u8(r2), vget_low_u8(r3));
+      uint16x8_t tmp1_hi = vaddl_u8(vget_high_u8(r2), vget_high_u8(r3));
+
+      sum_lo[0] = vaddq_u16(sum_lo[0], tmp0_lo);
+      sum_hi[0] = vaddq_u16(sum_hi[0], tmp0_hi);
+      sum_lo[1] = vaddq_u16(sum_lo[1], tmp1_lo);
+      sum_hi[1] = vaddq_u16(sum_hi[1], tmp1_hi);
+
+      r += 4 * ref_stride;
     }
 
-    const int16x8_t result0 =
-        vshlq_s16(vreinterpretq_s16_u16(vec0), neg_norm_factor);
-    const int16x8_t result1 =
-        vshlq_s16(vreinterpretq_s16_u16(vec1), neg_norm_factor);
+    sum_lo[0] = vaddq_u16(sum_lo[0], sum_lo[1]);
+    sum_hi[0] = vaddq_u16(sum_hi[0], sum_hi[1]);
 
-    vst1q_s16(hbuf + wd, result0);
-    vst1q_s16(hbuf + wd + 8, result1);
-  }
+    const int16x8_t avg0 =
+        vshlq_s16(vreinterpretq_s16_u16(sum_lo[0]), neg_norm_factor);
+    const int16x8_t avg1 =
+        vshlq_s16(vreinterpretq_s16_u16(sum_hi[0]), neg_norm_factor);
+
+    vst1q_s16(hbuf + w, avg0);
+    vst1q_s16(hbuf + w + 8, avg1);
+    w += 16;
+  } while (w < width);
 }
 
 void aom_int_pro_col_neon(int16_t *vbuf, const uint8_t *ref,
                           const int ref_stride, const int width,
                           const int height, int norm_factor) {
-  for (int ht = 0; ht < height; ++ht) {
-    uint16x8_t sum = vdupq_n_u16(0);
-    for (int wd = 0; wd < width; wd += 16) {
-      const uint8x16_t vec = vld1q_u8(ref + wd);
-      sum = vaddq_u16(sum, vpaddlq_u8(vec));
+  assert(width % 16 == 0);
+  assert(height % 4 == 0);
+
+  const int16x4_t neg_norm_factor = vdup_n_s16(-norm_factor);
+  uint16x8_t sum[4];
+
+  int h = 0;
+  do {
+    sum[0] = vpaddlq_u8(vld1q_u8(ref + 0 * ref_stride));
+    sum[1] = vpaddlq_u8(vld1q_u8(ref + 1 * ref_stride));
+    sum[2] = vpaddlq_u8(vld1q_u8(ref + 2 * ref_stride));
+    sum[3] = vpaddlq_u8(vld1q_u8(ref + 3 * ref_stride));
+
+    for (int w = 16; w < width; w += 16) {
+      sum[0] = vpadalq_u8(sum[0], vld1q_u8(ref + 0 * ref_stride + w));
+      sum[1] = vpadalq_u8(sum[1], vld1q_u8(ref + 1 * ref_stride + w));
+      sum[2] = vpadalq_u8(sum[2], vld1q_u8(ref + 2 * ref_stride + w));
+      sum[3] = vpadalq_u8(sum[3], vld1q_u8(ref + 3 * ref_stride + w));
     }
 
-#if defined(__aarch64__)
-    vbuf[ht] = ((int16_t)vaddvq_u16(sum)) >> norm_factor;
-#else
-    const uint32x4_t a = vpaddlq_u16(sum);
-    const uint64x2_t b = vpaddlq_u32(a);
-    const uint32x2_t c = vadd_u32(vreinterpret_u32_u64(vget_low_u64(b)),
-                                  vreinterpret_u32_u64(vget_high_u64(b)));
-    vbuf[ht] = ((int16_t)vget_lane_u32(c, 0)) >> norm_factor;
-#endif
-    ref += ref_stride;
-  }
+    uint16x4_t sum_4d = vmovn_u32(horizontal_add_4d_u16x8(sum));
+    int16x4_t avg = vshl_s16(vreinterpret_s16_u16(sum_4d), neg_norm_factor);
+    vst1_s16(vbuf + h, avg);
+
+    ref += 4 * ref_stride;
+    h += 4;
+  } while (h < height);
 }
 
 // coeff: 16 bits, dynamic range [-32640, 32640].
@@ -177,7 +216,7 @@ int aom_vector_var_neon(const int16_t *ref, const int16_t *src, int bwl) {
     v_mean = vpadalq_s16(v_mean, diff);
     v_low = vget_low_s16(diff);
     v_sse = vmlal_s16(v_sse, v_low, v_low);
-#if defined(__aarch64__)
+#if AOM_ARCH_AARCH64
     v_sse = vmlal_high_s16(v_sse, diff, diff);
 #else
     const int16x4_t v_high = vget_high_s16(diff);
@@ -220,7 +259,7 @@ void aom_minmax_8x8_neon(const uint8_t *a, int a_stride, const uint8_t *b,
   const uint8x16_t ab07_max = vmaxq_u8(ab0123_max, ab4567_max);
   const uint8x16_t ab07_min = vminq_u8(ab0123_min, ab4567_min);
 
-#if defined(__aarch64__)
+#if AOM_ARCH_AARCH64
   *min = *max = 0;  // Clear high bits
   *((uint8_t *)max) = vmaxvq_u8(ab07_max);
   *((uint8_t *)min) = vminvq_u8(ab07_min);
