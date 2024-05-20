@@ -12,6 +12,7 @@
 #include <assert.h>
 #include <limits.h>
 #include <math.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -187,8 +188,8 @@ int av1_rc_bits_per_mb(const AV1_COMP *cpi, FRAME_TYPE frame_type, int qindex,
   assert(correction_factor <= MAX_BPB_FACTOR &&
          correction_factor >= MIN_BPB_FACTOR);
 
-  if (frame_type != KEY_FRAME && accurate_estimate) {
-    assert(cpi->rec_sse != UINT64_MAX);
+  if (cpi->oxcf.rc_cfg.mode == AOM_CBR && frame_type != KEY_FRAME &&
+      accurate_estimate && cpi->rec_sse != UINT64_MAX) {
     const int mbs = cm->mi_params.MBs;
     const double sse_sqrt =
         (double)((int)sqrt((double)(cpi->rec_sse)) << BPER_MB_NORMBITS) /
@@ -2085,6 +2086,13 @@ static void rc_compute_variance_onepass_rt(AV1_COMP *cpi) {
   // TODO(yunqing): support scaled reference frames.
   if (cpi->scaled_ref_buf[LAST_FRAME - 1]) return;
 
+  for (int i = 0; i < 2; ++i) {
+    if (unscaled_src->widths[i] != yv12->widths[i] ||
+        unscaled_src->heights[i] != yv12->heights[i]) {
+      return;
+    }
+  }
+
   const int num_mi_cols = cm->mi_params.mi_cols;
   const int num_mi_rows = cm->mi_params.mi_rows;
   const BLOCK_SIZE bsize = BLOCK_64X64;
@@ -2247,7 +2255,8 @@ void av1_rc_postencode_update(AV1_COMP *cpi, uint64_t bytes_used) {
   av1_rc_update_rate_correction_factors(cpi, 0, cm->width, cm->height);
 
   // Update bit estimation ratio.
-  if (cm->current_frame.frame_type != KEY_FRAME &&
+  if (cpi->oxcf.rc_cfg.mode == AOM_CBR &&
+      cm->current_frame.frame_type != KEY_FRAME &&
       cpi->sf.hl_sf.accurate_bit_estimate) {
     const double q = av1_convert_qindex_to_q(cm->quant_params.base_qindex,
                                              cm->seq_params->bit_depth);
@@ -2895,10 +2904,12 @@ void av1_set_rtc_reference_structure_one_layer(AV1_COMP *cpi, int gf_update) {
   for (int i = 0; i < REF_FRAMES; ++i) rtc_ref->refresh[i] = 0;
   // Set the reference frame flags.
   ext_flags->ref_frame_flags ^= AOM_LAST_FLAG;
-  ext_flags->ref_frame_flags ^= AOM_ALT_FLAG;
-  ext_flags->ref_frame_flags ^= AOM_GOLD_FLAG;
-  if (cpi->sf.rt_sf.ref_frame_comp_nonrd[1])
-    ext_flags->ref_frame_flags ^= AOM_LAST2_FLAG;
+  if (!cpi->sf.rt_sf.force_only_last_ref) {
+    ext_flags->ref_frame_flags ^= AOM_ALT_FLAG;
+    ext_flags->ref_frame_flags ^= AOM_GOLD_FLAG;
+    if (cpi->sf.rt_sf.ref_frame_comp_nonrd[1])
+      ext_flags->ref_frame_flags ^= AOM_LAST2_FLAG;
+  }
   const int sh = 6;
   // Moving index slot for last: 0 - (sh - 1).
   if (frame_number > 1) last_idx = ((frame_number - 1) % sh);
@@ -3373,6 +3384,7 @@ void av1_get_one_pass_rt_params(AV1_COMP *cpi, FRAME_TYPE *const frame_type,
       svc->layer_context[layer].is_key_frame = 1;
     }
     rc->frame_number_encoded = 0;
+    cpi->ppi->rtc_ref.non_reference_frame = 0;
   } else {
     *frame_type = INTER_FRAME;
     gf_group->update_type[cpi->gf_frame_index] = LF_UPDATE;

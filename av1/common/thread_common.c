@@ -57,7 +57,6 @@ static INLINE int get_lr_sync_range(int width) {
 void av1_loop_filter_alloc(AV1LfSync *lf_sync, AV1_COMMON *cm, int rows,
                            int width, int num_workers) {
   lf_sync->rows = rows;
-  lf_sync->lf_mt_exit = false;
 #if CONFIG_MULTITHREAD
   {
     int i, j;
@@ -234,7 +233,12 @@ static INLINE void sync_write(AV1LfSync *const lf_sync, int r, int c,
   if (sig) {
     pthread_mutex_lock(&lf_sync->mutex_[plane][r]);
 
-    lf_sync->cur_sb_col[plane][r] = cur;
+    // When a thread encounters an error, cur_sb_col[plane][r] is set to maximum
+    // column number. In this case, the AOMMAX operation here ensures that
+    // cur_sb_col[plane][r] is not overwritten with a smaller value thus
+    // preventing the infinite waiting of threads in the relevant sync_read()
+    // function.
+    lf_sync->cur_sb_col[plane][r] = AOMMAX(lf_sync->cur_sb_col[plane][r], cur);
 
     pthread_cond_broadcast(&lf_sync->cond_[plane][r]);
     pthread_mutex_unlock(&lf_sync->mutex_[plane][r]);
@@ -551,7 +555,13 @@ static INLINE void lr_sync_write(void *const lr_sync, int r, int c,
   if (sig) {
     pthread_mutex_lock(&loop_res_sync->mutex_[plane][r]);
 
-    loop_res_sync->cur_sb_col[plane][r] = cur;
+    // When a thread encounters an error, cur_sb_col[plane][r] is set to maximum
+    // column number. In this case, the AOMMAX operation here ensures that
+    // cur_sb_col[plane][r] is not overwritten with a smaller value thus
+    // preventing the infinite waiting of threads in the relevant sync_read()
+    // function.
+    loop_res_sync->cur_sb_col[plane][r] =
+        AOMMAX(loop_res_sync->cur_sb_col[plane][r], cur);
 
     pthread_cond_broadcast(&loop_res_sync->cond_[plane][r]);
     pthread_mutex_unlock(&loop_res_sync->mutex_[plane][r]);
@@ -617,7 +627,6 @@ void av1_loop_restoration_alloc(AV1LrSync *lr_sync, AV1_COMMON *cm,
   }
 
   lr_sync->num_workers = num_workers;
-  lr_sync->lr_mt_exit = false;
 
   for (int j = 0; j < num_planes; j++) {
     CHECK_MEM_ERROR(
@@ -932,6 +941,7 @@ static void foreach_rest_unit_in_planes_mt(AV1LrStruct *lr_ctxt,
     av1_loop_restoration_alloc(lr_sync, cm, num_workers, num_rows_lr,
                                num_planes, cm->width);
   }
+  lr_sync->lr_mt_exit = false;
 
   // Initialize cur_sb_col to -1 for all SB rows.
   for (i = 0; i < num_planes; i++) {
@@ -985,6 +995,7 @@ static AOM_INLINE void reset_cdef_job_info(AV1CdefSync *const cdef_sync) {
   cdef_sync->end_of_frame = 0;
   cdef_sync->fbr = 0;
   cdef_sync->fbc = 0;
+  cdef_sync->cdef_mt_exit = false;
 }
 
 static AOM_INLINE void launch_cdef_workers(AVxWorker *const workers,

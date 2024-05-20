@@ -1544,6 +1544,13 @@ typedef struct {
    */
   bool firstpass_mt_exit;
 
+  /*!
+   * Initialized to false, set to true in cal_mb_wiener_var_hook() by the worker
+   * thread that encounters an error in order to abort the processing of other
+   * worker threads.
+   */
+  bool mb_wiener_mt_exit;
+
 #if CONFIG_MULTITHREAD
   /*!
    * Mutex lock used while dispatching jobs.
@@ -3176,6 +3183,18 @@ typedef struct AV1_COMP {
   int initial_mbs;
 
   /*!
+   * The width of the frame that is lastly encoded.
+   * It is updated in the function "encoder_encode()".
+   */
+  int last_coded_width;
+
+  /*!
+   * The height of the frame that is lastly encoded.
+   * It is updated in the function "encoder_encode()".
+   */
+  int last_coded_height;
+
+  /*!
    * Resize related parameters.
    */
   ResizePendingParams resize_pending_params;
@@ -3582,6 +3601,8 @@ typedef struct AV1_COMP {
 
   /*!
    * SSE between the current frame and the reconstructed last frame
+   * It is only used for CBR mode.
+   * It is not used if the reference frame has a different frame size.
    */
   uint64_t rec_sse;
 
@@ -3631,6 +3652,12 @@ typedef struct AV1_COMP {
    * fast encoding pass in av1_determine_sc_tools_with_encoding().
    */
   int palette_pixel_num;
+
+  /*!
+   * Flag to indicate scaled_last_source is available,
+   * so scaling is not needed for last_source.
+   */
+  int scaled_last_source_available;
 } AV1_COMP;
 
 /*!

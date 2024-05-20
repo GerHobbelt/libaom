@@ -1507,7 +1507,17 @@ static aom_codec_err_t encoder_set_config(aom_codec_alg_priv_t *ctx,
   if (cfg->g_w != ctx->cfg.g_w || cfg->g_h != ctx->cfg.g_h) {
     if (cfg->g_lag_in_frames > 1 || cfg->g_pass != AOM_RC_ONE_PASS)
       ERROR("Cannot change width or height after initialization");
-    if (!valid_ref_frame_size(ctx->cfg.g_w, ctx->cfg.g_h, cfg->g_w, cfg->g_h) ||
+    // Note: function encoder_set_config() is allowed to be called multiple
+    // times. However, when the original frame width or height is less than two
+    // times of the new frame width or height, a forced key frame should be
+    // used. To make sure the correct detection of a forced key frame, we need
+    // to update the frame width and height only when the actual encoding is
+    // performed. cpi->last_coded_width and cpi->last_coded_height are used to
+    // track the actual coded frame size.
+    if ((ctx->ppi->cpi->last_coded_width && ctx->ppi->cpi->last_coded_height &&
+         !valid_ref_frame_size(ctx->ppi->cpi->last_coded_width,
+                               ctx->ppi->cpi->last_coded_height, cfg->g_w,
+                               cfg->g_h)) ||
         (initial_dimensions->width &&
          (int)cfg->g_w > initial_dimensions->width) ||
         (initial_dimensions->height &&
@@ -1601,11 +1611,26 @@ static aom_codec_err_t update_extra_cfg(aom_codec_alg_priv_t *ctx,
     bool is_sb_size_changed = false;
     av1_change_config_seq(ctx->ppi, &ctx->oxcf, &is_sb_size_changed);
     for (int i = 0; i < ctx->ppi->num_fp_contexts; i++) {
-      av1_change_config(ctx->ppi->parallel_cpi[i], &ctx->oxcf,
-                        is_sb_size_changed);
+      AV1_COMP *const cpi = ctx->ppi->parallel_cpi[i];
+      struct aom_internal_error_info *const error = cpi->common.error;
+      if (setjmp(error->jmp)) {
+        error->setjmp = 0;
+        return error->error_code;
+      }
+      error->setjmp = 1;
+      av1_change_config(cpi, &ctx->oxcf, is_sb_size_changed);
+      error->setjmp = 0;
     }
     if (ctx->ppi->cpi_lap != NULL) {
-      av1_change_config(ctx->ppi->cpi_lap, &ctx->oxcf, is_sb_size_changed);
+      AV1_COMP *const cpi_lap = ctx->ppi->cpi_lap;
+      struct aom_internal_error_info *const error = cpi_lap->common.error;
+      if (setjmp(error->jmp)) {
+        error->setjmp = 0;
+        return error->error_code;
+      }
+      error->setjmp = 1;
+      av1_change_config(cpi_lap, &ctx->oxcf, is_sb_size_changed);
+      error->setjmp = 0;
     }
   }
   return res;
@@ -2924,6 +2949,9 @@ static aom_codec_err_t encoder_encode(aom_codec_alg_priv_t *ctx,
   AV1_COMP *cpi_lap = ppi->cpi_lap;
   if (ppi->cpi == NULL) return AOM_CODEC_INVALID_PARAM;
 
+  ppi->cpi->last_coded_width = ppi->cpi->oxcf.frm_dim_cfg.width;
+  ppi->cpi->last_coded_height = ppi->cpi->oxcf.frm_dim_cfg.height;
+
   if (ppi->lap_enabled && cpi_lap == NULL &&
       ppi->cpi->oxcf.pass == AOM_RC_ONE_PASS)
     return AOM_CODEC_INVALID_PARAM;
@@ -3123,11 +3151,24 @@ static aom_codec_err_t encoder_encode(aom_codec_alg_priv_t *ctx,
       av1_compute_num_workers_for_mt(cpi);
       num_workers = av1_get_max_num_workers(cpi);
     }
-    if ((num_workers > 1) && (ppi->p_mt_info.num_workers == 0)) {
+    if (num_workers > 1 && ppi->p_mt_info.num_workers < num_workers) {
       // Obtain the maximum no. of frames that can be supported in a parallel
       // encode set.
       if (is_stat_consumption_stage(cpi)) {
         ppi->num_fp_contexts = av1_compute_num_fp_contexts(ppi, &cpi->oxcf);
+      }
+      if (ppi->p_mt_info.num_workers > 0) {
+        av1_terminate_workers(ppi);
+        free_thread_data(ppi);
+        aom_free(ppi->p_mt_info.tile_thr_data);
+        ppi->p_mt_info.tile_thr_data = NULL;
+        aom_free(ppi->p_mt_info.workers);
+        ppi->p_mt_info.workers = NULL;
+        ppi->p_mt_info.num_workers = 0;
+        for (int j = 0; j < ppi->num_fp_contexts; j++) {
+          aom_free(ppi->parallel_cpi[j]->td.tctx);
+          ppi->parallel_cpi[j]->td.tctx = NULL;
+        }
       }
       av1_create_workers(ppi, num_workers);
       av1_init_tile_thread_data(ppi, cpi->oxcf.pass == AOM_RC_FIRST_PASS);
@@ -3580,8 +3621,8 @@ static aom_codec_err_t ctrl_set_svc_params(aom_codec_alg_priv_t *ctx,
         LAYER_CONTEXT *lc = &cpi->svc.layer_context[layer];
         lc->max_q = params->max_quantizers[layer];
         lc->min_q = params->min_quantizers[layer];
-        lc->scaling_factor_num = params->scaling_factor_num[sl];
-        lc->scaling_factor_den = params->scaling_factor_den[sl];
+        lc->scaling_factor_num = AOMMAX(1, params->scaling_factor_num[sl]);
+        lc->scaling_factor_den = AOMMAX(1, params->scaling_factor_den[sl]);
         const int layer_target_bitrate = params->layer_target_bitrate[layer];
         if (layer_target_bitrate > INT_MAX / 1000) {
           lc->layer_target_bitrate = INT_MAX;

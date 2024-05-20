@@ -692,7 +692,7 @@ void aom_lpf_vertical_14_neon(uint8_t *src, int stride, const uint8_t *blimit,
   row2 = vcombine_u8(p5p1, q2q6);
   row3 = vcombine_u8(p4p0, q3qy);
 
-  store_u8_8x16(src - 8, stride, row0, row1, row2, row3);
+  store_u8_16x4(src - 8, stride, row0, row1, row2, row3);
 }
 
 void aom_lpf_vertical_14_dual_neon(
@@ -862,10 +862,8 @@ void aom_lpf_vertical_4_neon(uint8_t *src, int stride, const uint8_t *blimit,
 
   transpose_elems_inplace_u8_4x4(&p1p0, &q0q1);
 
-  store_unaligned_u8_4x1(src - 2, p1p0, 0);
-  store_unaligned_u8_4x1((src - 2) + 1 * stride, q0q1, 0);
-  store_unaligned_u8_4x1((src - 2) + 2 * stride, p1p0, 1);
-  store_unaligned_u8_4x1((src - 2) + 3 * stride, q0q1, 1);
+  store_u8x4_strided_x2(src - 2, 2 * stride, p1p0);
+  store_u8x4_strided_x2(src + stride - 2, 2 * stride, q0q1);
 }
 
 void aom_lpf_vertical_4_dual_neon(uint8_t *s, int pitch, const uint8_t *blimit0,

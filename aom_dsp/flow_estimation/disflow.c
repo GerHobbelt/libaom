@@ -52,8 +52,15 @@
 // this gives the correct offset of 0 instead of -1.
 #define UPSAMPLE_CENTER_OFFSET ((DOWNSAMPLE_FACTOR - 1) / 2)
 
-static INLINE void get_cubic_kernel_dbl(double x, double *kernel) {
-  assert(0 <= x && x < 1);
+static INLINE void get_cubic_kernel_dbl(double x, double kernel[4]) {
+  // Check that the fractional position is in range.
+  //
+  // Note: x is calculated from (eg.) `u_frac = u - floor(u)`.
+  // Mathematically, this implies that 0 <= x < 1. However, in practice it is
+  // possible to have x == 1 due to floating point rounding. This is fine,
+  // and we still interpolate correctly if we allow x = 1.
+  assert(0 <= x && x <= 1);
+
   double x2 = x * x;
   double x3 = x2 * x;
   kernel[0] = -0.5 * x + x2 - 0.5 * x3;
@@ -62,7 +69,7 @@ static INLINE void get_cubic_kernel_dbl(double x, double *kernel) {
   kernel[3] = -0.5 * x2 + 0.5 * x3;
 }
 
-static INLINE void get_cubic_kernel_int(double x, int *kernel) {
+static INLINE void get_cubic_kernel_int(double x, int kernel[4]) {
   double kernel_dbl[4];
   get_cubic_kernel_dbl(x, kernel_dbl);
 
@@ -73,18 +80,19 @@ static INLINE void get_cubic_kernel_int(double x, int *kernel) {
 }
 
 static INLINE double get_cubic_value_dbl(const double *p,
-                                         const double *kernel) {
+                                         const double kernel[4]) {
   return kernel[0] * p[0] + kernel[1] * p[1] + kernel[2] * p[2] +
          kernel[3] * p[3];
 }
 
-static INLINE int get_cubic_value_int(const int *p, const int *kernel) {
+static INLINE int get_cubic_value_int(const int *p, const int kernel[4]) {
   return kernel[0] * p[0] + kernel[1] * p[1] + kernel[2] * p[2] +
          kernel[3] * p[3];
 }
 
 static INLINE double bicubic_interp_one(const double *arr, int stride,
-                                        double *h_kernel, double *v_kernel) {
+                                        const double h_kernel[4],
+                                        const double v_kernel[4]) {
   double tmp[1 * 4];
 
   // Horizontal convolution
@@ -96,7 +104,9 @@ static INLINE double bicubic_interp_one(const double *arr, int stride,
   return get_cubic_value_dbl(tmp, v_kernel);
 }
 
-static int determine_disflow_correspondence(CornerList *corners,
+static int determine_disflow_correspondence(const ImagePyramid *src_pyr,
+                                            const ImagePyramid *ref_pyr,
+                                            CornerList *corners,
                                             const FlowField *flow,
                                             Correspondence *correspondences) {
   const int width = flow->width;
@@ -134,10 +144,18 @@ static int determine_disflow_correspondence(CornerList *corners,
     get_cubic_kernel_dbl(flow_sub_x, h_kernel);
     get_cubic_kernel_dbl(flow_sub_y, v_kernel);
 
-    const double flow_u = bicubic_interp_one(&flow->u[flow_y * stride + flow_x],
-                                             stride, h_kernel, v_kernel);
-    const double flow_v = bicubic_interp_one(&flow->v[flow_y * stride + flow_x],
-                                             stride, h_kernel, v_kernel);
+    double flow_u = bicubic_interp_one(&flow->u[flow_y * stride + flow_x],
+                                       stride, h_kernel, v_kernel);
+    double flow_v = bicubic_interp_one(&flow->v[flow_y * stride + flow_x],
+                                       stride, h_kernel, v_kernel);
+
+    // Refine the interpolated flow vector one last time
+    const int patch_tl_x = x0 - DISFLOW_PATCH_CENTER;
+    const int patch_tl_y = y0 - DISFLOW_PATCH_CENTER;
+    aom_compute_flow_at_point(
+        src_pyr->layers[0].buffer, ref_pyr->layers[0].buffer, patch_tl_x,
+        patch_tl_y, src_pyr->layers[0].width, src_pyr->layers[0].height,
+        src_pyr->layers[0].stride, &flow_u, &flow_v);
 
     // Use original points (without offsets) when filling in correspondence
     // array
@@ -469,7 +487,14 @@ static bool compute_flow_field(const ImagePyramid *src_pyr,
   }
 
   // Compute flow field from coarsest to finest level of the pyramid
-  for (int level = src_pyr->n_levels - 1; level >= 0; --level) {
+  //
+  // Note: We stop after refining pyramid level 1 and interpolating it to
+  // generate an initial flow field at level 0. We do *not* refine the dense
+  // flow field at level 0. Instead, we wait until we have generated
+  // correspondences by interpolating this flow field, and then refine the
+  // correspondences themselves. This is both faster and gives better output
+  // compared to refining the flow field at level 0 and then interpolating.
+  for (int level = src_pyr->n_levels - 1; level >= 1; --level) {
     const PyramidLayer *cur_layer = &src_pyr->layers[level];
     const int cur_width = cur_layer->width;
     const int cur_height = cur_layer->height;
@@ -657,8 +682,8 @@ bool av1_compute_global_motion_disflow(TransformationType type,
     return false;
   }
 
-  const int num_correspondences =
-      determine_disflow_correspondence(src_corners, flow, correspondences);
+  const int num_correspondences = determine_disflow_correspondence(
+      src_pyramid, ref_pyramid, src_corners, flow, correspondences);
 
   bool result = ransac(correspondences, num_correspondences, type,
                        motion_models, num_motion_models, mem_alloc_failed);

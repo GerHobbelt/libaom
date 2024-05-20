@@ -1495,6 +1495,7 @@ AV1_COMP *av1_create_compressor(AV1_PRIMARY *ppi, const AV1EncoderConfig *oxcf,
   cpi->mb_weber_stats = NULL;
   cpi->mb_delta_q = NULL;
   cpi->palette_pixel_num = 0;
+  cpi->scaled_last_source_available = 0;
 
   {
     const BLOCK_SIZE bsize = BLOCK_16X16;
@@ -1614,17 +1615,6 @@ AV1_COMP *av1_create_compressor(AV1_PRIMARY *ppi, const AV1EncoderConfig *oxcf,
   snprintf((H) + strlen(H), sizeof(H) - strlen(H), (T), (V))
 #endif  // CONFIG_INTERNAL_STATS
 
-// This function will change the state and free the mutex of corresponding
-// workers and terminate the object. The object can not be re-used unless a call
-// to reset() is made.
-static AOM_INLINE void terminate_worker_data(AV1_PRIMARY *ppi) {
-  PrimaryMultiThreadInfo *const p_mt_info = &ppi->p_mt_info;
-  for (int t = p_mt_info->num_workers - 1; t >= 0; --t) {
-    AVxWorker *const worker = &p_mt_info->workers[t];
-    aom_get_worker_interface()->end(worker);
-  }
-}
-
 void av1_remove_primary_compressor(AV1_PRIMARY *ppi) {
   if (!ppi) return;
 #if !CONFIG_REALTIME_ONLY
@@ -1652,11 +1642,14 @@ void av1_remove_primary_compressor(AV1_PRIMARY *ppi) {
   av1_tpl_dealloc(&tpl_data->tpl_mt_sync);
 #endif
 
-  terminate_worker_data(ppi);
+  av1_terminate_workers(ppi);
   free_thread_data(ppi);
 
   aom_free(ppi->p_mt_info.tile_thr_data);
+  ppi->p_mt_info.tile_thr_data = NULL;
   aom_free(ppi->p_mt_info.workers);
+  ppi->p_mt_info.workers = NULL;
+  ppi->p_mt_info.num_workers = 0;
 
   aom_free(ppi);
 }
@@ -2229,6 +2222,7 @@ void av1_set_frame_size(AV1_COMP *cpi, int width, int height) {
 
   init_motion_estimation(cpi);
 
+  int has_valid_ref_frame = 0;
   for (ref_frame = LAST_FRAME; ref_frame <= ALTREF_FRAME; ++ref_frame) {
     RefCntBuffer *const buf = get_ref_frame_buf(cm, ref_frame);
     if (buf != NULL) {
@@ -2236,8 +2230,14 @@ void av1_set_frame_size(AV1_COMP *cpi, int width, int height) {
       av1_setup_scale_factors_for_frame(sf, buf->buf.y_crop_width,
                                         buf->buf.y_crop_height, cm->width,
                                         cm->height);
+      has_valid_ref_frame |= av1_is_valid_scale(sf);
       if (av1_is_scaled(sf)) aom_extend_frame_borders(&buf->buf, num_planes);
     }
+  }
+  if (!frame_is_intra_only(cm) && !has_valid_ref_frame) {
+    aom_internal_error(
+        cm->error, AOM_CODEC_CORRUPT_FRAME,
+        "Can't find at least one reference frame with valid size");
   }
 
   av1_setup_scale_factors_for_frame(&cm->sf_identity, cm->width, cm->height,
@@ -2467,7 +2467,6 @@ static int encode_without_recode(AV1_COMP *cpi) {
   const QuantizationCfg *const q_cfg = &cpi->oxcf.q_cfg;
   SVC *const svc = &cpi->svc;
   const int resize_pending = is_frame_resize_pending(cpi);
-
   int top_index = 0, bottom_index = 0, q = 0;
   YV12_BUFFER_CONFIG *unscaled = cpi->unscaled_source;
   InterpFilter filter_scaler =
@@ -2556,7 +2555,10 @@ static int encode_without_recode(AV1_COMP *cpi) {
     memset(cpi->consec_zero_mv, 0, current_size * sizeof(*cpi->consec_zero_mv));
   }
 
-  if (cpi->unscaled_last_source != NULL) {
+  if (cpi->scaled_last_source_available) {
+    cpi->last_source = &cpi->scaled_last_source;
+    cpi->scaled_last_source_available = 0;
+  } else if (cpi->unscaled_last_source != NULL) {
     cpi->last_source = av1_realloc_and_scale_if_required(
         cm, cpi->unscaled_last_source, &cpi->scaled_last_source, filter_scaler,
         phase_scaler, true, false, cpi->oxcf.border_in_pixels,
@@ -2578,12 +2580,15 @@ static int encode_without_recode(AV1_COMP *cpi) {
   // av1_scale_references. Note GOLDEN is forced to update on the (first/tigger)
   // resized frame and ALTREF will be refreshed ~4 frames later, so both
   // references become available again after few frames.
+  // For superres: don't disable golden reference.
   if (svc->number_spatial_layers == 1) {
-    if (cpi->ref_frame_flags & av1_ref_frame_flag_list[GOLDEN_FRAME]) {
-      const YV12_BUFFER_CONFIG *const ref =
-          get_ref_frame_yv12_buf(cm, GOLDEN_FRAME);
-      if (ref->y_crop_width != cm->width || ref->y_crop_height != cm->height)
-        cpi->ref_frame_flags ^= AOM_GOLD_FLAG;
+    if (!cpi->oxcf.superres_cfg.enable_superres) {
+      if (cpi->ref_frame_flags & av1_ref_frame_flag_list[GOLDEN_FRAME]) {
+        const YV12_BUFFER_CONFIG *const ref =
+            get_ref_frame_yv12_buf(cm, GOLDEN_FRAME);
+        if (ref->y_crop_width != cm->width || ref->y_crop_height != cm->height)
+          cpi->ref_frame_flags ^= AOM_GOLD_FLAG;
+      }
     }
     if (cpi->ref_frame_flags & av1_ref_frame_flag_list[ALTREF_FRAME]) {
       const YV12_BUFFER_CONFIG *const ref =
@@ -2693,6 +2698,22 @@ static int encode_without_recode(AV1_COMP *cpi) {
       svc->number_temporal_layers == 1 && !cpi->rc.rtc_external_ratectrl &&
       sf->rt_sf.gf_refresh_based_on_qp)
     av1_adjust_gf_refresh_qp_one_pass_rt(cpi);
+
+  // For non-svc: if scaling is required, copy scaled_source
+  // into scaled_last_source.
+  if (cm->current_frame.frame_number > 1 && !cpi->ppi->use_svc &&
+      cpi->scaled_source.y_buffer != NULL &&
+      cpi->scaled_last_source.y_buffer != NULL &&
+      cpi->scaled_source.y_crop_width == cpi->scaled_last_source.y_crop_width &&
+      cpi->scaled_source.y_crop_height ==
+          cpi->scaled_last_source.y_crop_height &&
+      (cm->width != cpi->unscaled_source->y_crop_width ||
+       cm->height != cpi->unscaled_source->y_crop_height)) {
+    cpi->scaled_last_source_available = 1;
+    aom_yv12_copy_y(&cpi->scaled_source, &cpi->scaled_last_source);
+    aom_yv12_copy_u(&cpi->scaled_source, &cpi->scaled_last_source);
+    aom_yv12_copy_v(&cpi->scaled_source, &cpi->scaled_last_source);
+  }
 
 #if CONFIG_COLLECT_COMPONENT_TIMING
   end_timing(cpi, av1_encode_frame_time);
@@ -3799,6 +3820,8 @@ static int encode_frame_to_data_rate(AV1_COMP *cpi, size_t *size,
       if (cpi->sf.rt_sf.disable_cdf_update_non_reference_frame &&
           cpi->ppi->rtc_ref.non_reference_frame && cpi->rc.frames_since_key > 2)
         features->disable_cdf_update = 1;
+      else if (cpi->sf.rt_sf.selective_cdf_update)
+        features->disable_cdf_update = selective_disable_cdf_rtc(cpi);
       else
         features->disable_cdf_update = 0;
       break;
@@ -4686,7 +4709,7 @@ int av1_get_compressed_data(AV1_COMP *cpi, AV1_COMP_DATA *const cpi_data) {
     aom_bitstream_queue_set_frame_write(cm->current_frame.frame_number);
   }
 #endif
-  if (cpi->ppi->use_svc && cpi->ppi->number_spatial_layers > 1) {
+  if (cpi->ppi->use_svc) {
     av1_one_pass_cbr_svc_start_layer(cpi);
   }
 
