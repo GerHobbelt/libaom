@@ -631,6 +631,11 @@ INSTANTIATE_TEST_SUITE_P(NEON, AV1ConvolveXHighbdTest,
                          BuildHighbdParams(av1_highbd_convolve_x_sr_neon));
 #endif
 
+#if HAVE_SVE2
+INSTANTIATE_TEST_SUITE_P(SVE2, AV1ConvolveXHighbdTest,
+                         BuildHighbdParams(av1_highbd_convolve_x_sr_sve2));
+#endif
+
 /////////////////////////////////////////////////////////////////
 // Single reference convolve-x IntraBC functions (high bit-depth)
 /////////////////////////////////////////////////////////////////
@@ -2311,11 +2316,6 @@ TEST_P(AV1Convolve2DCompoundTest, RunTest) { RunTest(); }
 
 INSTANTIATE_TEST_SUITE_P(C, AV1Convolve2DCompoundTest,
                          BuildLowbdLumaParams(av1_dist_wtd_convolve_2d_c));
-
-#if HAVE_SSE2
-INSTANTIATE_TEST_SUITE_P(SSE2, AV1Convolve2DCompoundTest,
-                         BuildLowbdLumaParams(av1_dist_wtd_convolve_2d_sse2));
-#endif
 
 #if HAVE_SSSE3
 INSTANTIATE_TEST_SUITE_P(SSSE3, AV1Convolve2DCompoundTest,
