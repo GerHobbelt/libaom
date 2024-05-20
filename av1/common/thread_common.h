@@ -75,6 +75,7 @@ typedef struct LoopRestorationWorkerData {
   void *rlbs;
   void *lr_ctxt;
   int do_extend_border;
+  struct aom_internal_error_info error_info;
 } LRWorkerData;
 
 // Looprestoration row synchronization
@@ -102,6 +103,9 @@ typedef struct AV1LrSyncData {
   AV1LrMTInfo *job_queue;
   int jobs_enqueued;
   int jobs_dequeued;
+  // Initialized to false, set to true by the worker thread that encounters
+  // an error in order to abort the processing of other worker threads.
+  bool lr_mt_exit;
 } AV1LrSync;
 
 typedef struct AV1CdefWorker {
@@ -112,6 +116,7 @@ typedef struct AV1CdefWorker {
   uint16_t *linebuf[MAX_MB_PLANE];
   cdef_init_fb_row_t cdef_init_fb_row_fn;
   int do_extend_border;
+  struct aom_internal_error_info error_info;
 } AV1CdefWorkerData;
 
 typedef struct AV1CdefRowSync {
@@ -185,7 +190,7 @@ void av1_loop_restoration_filter_frame_mt(YV12_BUFFER_CONFIG *frame,
                                           int optimized_lr, AVxWorker *workers,
                                           int num_workers, AV1LrSync *lr_sync,
                                           void *lr_ctxt, int do_extend_border);
-void av1_loop_restoration_dealloc(AV1LrSync *lr_sync, int num_workers);
+void av1_loop_restoration_dealloc(AV1LrSync *lr_sync);
 void av1_loop_restoration_alloc(AV1LrSync *lr_sync, AV1_COMMON *cm,
                                 int num_workers, int num_rows_lr,
                                 int num_planes, int width);

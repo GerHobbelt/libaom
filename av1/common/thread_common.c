@@ -617,6 +617,7 @@ void av1_loop_restoration_alloc(AV1LrSync *lr_sync, AV1_COMMON *cm,
   }
 
   lr_sync->num_workers = num_workers;
+  lr_sync->lr_mt_exit = false;
 
   for (int j = 0; j < num_planes; j++) {
     CHECK_MEM_ERROR(
@@ -631,7 +632,7 @@ void av1_loop_restoration_alloc(AV1LrSync *lr_sync, AV1_COMMON *cm,
 }
 
 // Deallocate loop restoration synchronization related mutex and data
-void av1_loop_restoration_dealloc(AV1LrSync *lr_sync, int num_workers) {
+void av1_loop_restoration_dealloc(AV1LrSync *lr_sync) {
   if (lr_sync != NULL) {
     int j;
 #if CONFIG_MULTITHREAD
@@ -662,7 +663,8 @@ void av1_loop_restoration_dealloc(AV1LrSync *lr_sync, int num_workers) {
     aom_free(lr_sync->job_queue);
 
     if (lr_sync->lrworkerdata) {
-      for (int worker_idx = 0; worker_idx < num_workers - 1; worker_idx++) {
+      for (int worker_idx = 0; worker_idx < lr_sync->num_workers - 1;
+           worker_idx++) {
         LRWorkerData *const workerdata_data =
             lr_sync->lrworkerdata + worker_idx;
 
@@ -759,7 +761,7 @@ static AV1LrMTInfo *get_lr_job_info(AV1LrSync *lr_sync) {
 #if CONFIG_MULTITHREAD
   pthread_mutex_lock(lr_sync->job_mutex);
 
-  if (lr_sync->jobs_dequeued < lr_sync->jobs_enqueued) {
+  if (!lr_sync->lr_mt_exit && lr_sync->jobs_dequeued < lr_sync->jobs_enqueued) {
     cur_job_info = lr_sync->job_queue + lr_sync->jobs_dequeued;
     lr_sync->jobs_dequeued++;
   }
@@ -772,6 +774,26 @@ static AV1LrMTInfo *get_lr_job_info(AV1LrSync *lr_sync) {
   return cur_job_info;
 }
 
+static void set_loop_restoration_done(AV1LrSync *const lr_sync,
+                                      FilterFrameCtxt *const ctxt) {
+  for (int plane = 0; plane < MAX_MB_PLANE; ++plane) {
+    if (ctxt[plane].rsi->frame_restoration_type == RESTORE_NONE) continue;
+    int y0 = 0, row_number = 0;
+    const int unit_size = ctxt[plane].rsi->restoration_unit_size;
+    const int plane_h = ctxt[plane].plane_h;
+    const int ext_size = unit_size * 3 / 2;
+    const int hnum_rest_units = ctxt[plane].rsi->horz_units;
+    while (y0 < plane_h) {
+      const int remaining_h = plane_h - y0;
+      const int h = (remaining_h < ext_size) ? remaining_h : unit_size;
+      lr_sync_write(lr_sync, row_number, hnum_rest_units - 1, hnum_rest_units,
+                    plane);
+      y0 += h;
+      ++row_number;
+    }
+  }
+}
+
 // Implement row loop restoration for each thread.
 static int loop_restoration_row_worker(void *arg1, void *arg2) {
   AV1LrSync *const lr_sync = (AV1LrSync *)arg1;
@@ -781,6 +803,31 @@ static int loop_restoration_row_worker(void *arg1, void *arg2) {
   int lr_unit_row;
   int plane;
   int plane_w;
+#if CONFIG_MULTITHREAD
+  pthread_mutex_t *job_mutex_ = lr_sync->job_mutex;
+#endif
+  struct aom_internal_error_info *const error_info = &lrworkerdata->error_info;
+
+  // The jmp_buf is valid only for the duration of the function that calls
+  // setjmp(). Therefore, this function must reset the 'setjmp' field to 0
+  // before it returns.
+  if (setjmp(error_info->jmp)) {
+    error_info->setjmp = 0;
+#if CONFIG_MULTITHREAD
+    pthread_mutex_lock(job_mutex_);
+    lr_sync->lr_mt_exit = true;
+    pthread_mutex_unlock(job_mutex_);
+#endif
+    // In case of loop restoration multithreading, the worker on an even lr
+    // block row waits for the completion of the filtering of the top-right and
+    // bottom-right blocks. Hence, in case a thread (main/worker) encounters an
+    // error, update that filtering of every row in the frame is complete in
+    // order to avoid the dependent workers from waiting indefinitely.
+    set_loop_restoration_done(lr_sync, lr_ctxt->ctxt);
+    return 0;
+  }
+  error_info->setjmp = 1;
+
   typedef void (*copy_fun)(const YV12_BUFFER_CONFIG *src_ybc,
                            YV12_BUFFER_CONFIG *dst_ybc, int hstart, int hend,
                            int vstart, int vend);
@@ -813,7 +860,7 @@ static int loop_restoration_row_worker(void *arg1, void *arg2) {
           ctxt[plane].rsi->restoration_unit_size, ctxt[plane].rsi->horz_units,
           ctxt[plane].rsi->vert_units, plane, &ctxt[plane],
           lrworkerdata->rst_tmpbuf, lrworkerdata->rlbs, on_sync_read,
-          on_sync_write, lr_sync);
+          on_sync_write, lr_sync, error_info);
 
       copy_funs[plane](lr_ctxt->dst, lr_ctxt->frame, 0, plane_w,
                        cur_job_info->v_copy_start, cur_job_info->v_copy_end);
@@ -827,7 +874,33 @@ static int loop_restoration_row_worker(void *arg1, void *arg2) {
       break;
     }
   }
+  error_info->setjmp = 0;
   return 1;
+}
+
+static AOM_INLINE void sync_lr_workers(AVxWorker *const workers,
+                                       AV1_COMMON *const cm, int num_workers) {
+  const AVxWorkerInterface *const winterface = aom_get_worker_interface();
+  int had_error = workers[0].had_error;
+  struct aom_internal_error_info error_info;
+
+  // Read the error_info of main thread.
+  if (had_error) {
+    AVxWorker *const worker = &workers[0];
+    error_info = ((LRWorkerData *)worker->data2)->error_info;
+  }
+
+  // Wait till all rows are finished.
+  for (int i = num_workers - 1; i > 0; --i) {
+    AVxWorker *const worker = &workers[i];
+    if (!winterface->sync(worker)) {
+      had_error = 1;
+      error_info = ((LRWorkerData *)worker->data2)->error_info;
+    }
+  }
+  if (had_error)
+    aom_internal_error(cm->error, error_info.error_code, "%s",
+                       error_info.detail);
 }
 
 static void foreach_rest_unit_in_planes_mt(AV1LrStruct *lr_ctxt,
@@ -856,7 +929,7 @@ static void foreach_rest_unit_in_planes_mt(AV1LrStruct *lr_ctxt,
 
   if (!lr_sync->sync_range || num_rows_lr > lr_sync->rows ||
       num_workers > lr_sync->num_workers || num_planes > lr_sync->num_planes) {
-    av1_loop_restoration_dealloc(lr_sync, num_workers);
+    av1_loop_restoration_dealloc(lr_sync);
     av1_loop_restoration_alloc(lr_sync, cm, num_workers, num_rows_lr,
                                num_planes, cm->width);
   }
@@ -879,6 +952,7 @@ static void foreach_rest_unit_in_planes_mt(AV1LrStruct *lr_ctxt,
     worker->data2 = &lr_sync->lrworkerdata[i];
 
     // Start loop restoration
+    worker->had_error = 0;
     if (i == 0) {
       winterface->execute(worker);
     } else {
@@ -886,10 +960,7 @@ static void foreach_rest_unit_in_planes_mt(AV1LrStruct *lr_ctxt,
     }
   }
 
-  // Wait till all rows are finished
-  for (i = 1; i < num_workers; ++i) {
-    winterface->sync(&workers[i]);
-  }
+  sync_lr_workers(workers, cm, num_workers);
 }
 
 void av1_loop_restoration_filter_frame_mt(YV12_BUFFER_CONFIG *frame,
@@ -922,6 +993,7 @@ static AOM_INLINE void launch_cdef_workers(AVxWorker *const workers,
   const AVxWorkerInterface *const winterface = aom_get_worker_interface();
   for (int i = num_workers - 1; i >= 0; i--) {
     AVxWorker *const worker = &workers[i];
+    worker->had_error = 0;
     if (i == 0)
       winterface->execute(worker);
     else
@@ -933,16 +1005,26 @@ static AOM_INLINE void sync_cdef_workers(AVxWorker *const workers,
                                          AV1_COMMON *const cm,
                                          int num_workers) {
   const AVxWorkerInterface *const winterface = aom_get_worker_interface();
-  int had_error = 0;
+  int had_error = workers[0].had_error;
+  struct aom_internal_error_info error_info;
 
-  // Wait for completion of Cdef frame.
-  for (int i = num_workers - 1; i > 0; i--) {
+  // Read the error_info of main thread.
+  if (had_error) {
+    AVxWorker *const worker = &workers[0];
+    error_info = ((AV1CdefWorkerData *)worker->data2)->error_info;
+  }
+
+  // Wait till all rows are finished.
+  for (int i = num_workers - 1; i > 0; --i) {
     AVxWorker *const worker = &workers[i];
-    had_error |= !winterface->sync(worker);
+    if (!winterface->sync(worker)) {
+      had_error = 1;
+      error_info = ((AV1CdefWorkerData *)worker->data2)->error_info;
+    }
   }
   if (had_error)
-    aom_internal_error(cm->error, AOM_CODEC_ERROR,
-                       "Failed to process cdef frame");
+    aom_internal_error(cm->error, error_info.error_code, "%s",
+                       error_info.detail);
 }
 
 // Updates the row index of the next job to be processed.
@@ -958,14 +1040,15 @@ static void update_cdef_row_next_job_info(AV1CdefSync *const cdef_sync,
 // Checks if a job is available. If job is available,
 // populates next job information and returns 1, else returns 0.
 static AOM_INLINE int get_cdef_row_next_job(AV1CdefSync *const cdef_sync,
-                                            int *cur_fbr, const int nvfb) {
+                                            volatile int *cur_fbr,
+                                            const int nvfb) {
 #if CONFIG_MULTITHREAD
   pthread_mutex_lock(cdef_sync->mutex_);
 #endif  // CONFIG_MULTITHREAD
   int do_next_row = 0;
   // Populates information needed for current job and update the row
   // index of the next row to be processed.
-  if (cdef_sync->end_of_frame == 0) {
+  if (!cdef_sync->cdef_mt_exit && cdef_sync->end_of_frame == 0) {
     do_next_row = 1;
     *cur_fbr = cdef_sync->fbr;
     update_cdef_row_next_job_info(cdef_sync, nvfb);
@@ -976,19 +1059,49 @@ static AOM_INLINE int get_cdef_row_next_job(AV1CdefSync *const cdef_sync,
   return do_next_row;
 }
 
+static void set_cdef_init_fb_row_done(AV1CdefSync *const cdef_sync, int nvfb) {
+  for (int fbr = 0; fbr < nvfb; fbr++) cdef_row_mt_sync_write(cdef_sync, fbr);
+}
+
 // Hook function for each thread in CDEF multi-threading.
 static int cdef_sb_row_worker_hook(void *arg1, void *arg2) {
   AV1CdefSync *const cdef_sync = (AV1CdefSync *)arg1;
   AV1CdefWorkerData *const cdef_worker = (AV1CdefWorkerData *)arg2;
   AV1_COMMON *cm = cdef_worker->cm;
   const int nvfb = (cm->mi_params.mi_rows + MI_SIZE_64X64 - 1) / MI_SIZE_64X64;
-  int cur_fbr;
+
+#if CONFIG_MULTITHREAD
+  pthread_mutex_t *job_mutex_ = cdef_sync->mutex_;
+#endif
+  struct aom_internal_error_info *const error_info = &cdef_worker->error_info;
+
+  // The jmp_buf is valid only for the duration of the function that calls
+  // setjmp(). Therefore, this function must reset the 'setjmp' field to 0
+  // before it returns.
+  if (setjmp(error_info->jmp)) {
+    error_info->setjmp = 0;
+#if CONFIG_MULTITHREAD
+    pthread_mutex_lock(job_mutex_);
+    cdef_sync->cdef_mt_exit = true;
+    pthread_mutex_unlock(job_mutex_);
+#endif
+    // In case of cdef row-multithreading, the worker on a filter block row
+    // (fbr) waits for the line buffers (top and bottom) copy of the above row.
+    // Hence, in case a thread (main/worker) encounters an error before copying
+    // of the line buffers, update that line buffer copy is complete in order to
+    // avoid dependent workers waiting indefinitely.
+    set_cdef_init_fb_row_done(cdef_sync, nvfb);
+    return 0;
+  }
+  error_info->setjmp = 1;
+
+  volatile int cur_fbr;
   const int num_planes = av1_num_planes(cm);
   while (get_cdef_row_next_job(cdef_sync, &cur_fbr, nvfb)) {
     MACROBLOCKD *xd = cdef_worker->xd;
     av1_cdef_fb_row(cm, xd, cdef_worker->linebuf, cdef_worker->colbuf,
                     cdef_worker->srcbuf, cur_fbr,
-                    cdef_worker->cdef_init_fb_row_fn, cdef_sync);
+                    cdef_worker->cdef_init_fb_row_fn, cdef_sync, error_info);
     if (cdef_worker->do_extend_border) {
       for (int plane = 0; plane < num_planes; ++plane) {
         const YV12_BUFFER_CONFIG *ybf = &cm->cur_frame->buf;
@@ -1002,6 +1115,7 @@ static int cdef_sb_row_worker_hook(void *arg1, void *arg2) {
       }
     }
   }
+  error_info->setjmp = 0;
   return 1;
 }
 
