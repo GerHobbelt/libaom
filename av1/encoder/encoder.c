@@ -644,6 +644,10 @@ static void init_config(struct AV1_COMP *cpi, const AV1EncoderConfig *oxcf) {
 
   alloc_compressor_data(cpi);
 
+  cpi->data_alloc_width = cm->width;
+  cpi->data_alloc_height = cm->height;
+  cpi->frame_size_related_setup_done = false;
+
   // Single thread case: use counts in common.
   cpi->td.counts = &cpi->counts;
 
@@ -767,7 +771,6 @@ void av1_change_config(struct AV1_COMP *cpi, const AV1EncoderConfig *oxcf,
   PRIMARY_RATE_CONTROL *const p_rc = &cpi->ppi->p_rc;
   MACROBLOCK *const x = &cpi->td.mb;
   AV1LevelParams *const level_params = &cpi->ppi->level_params;
-  InitialDimensions *const initial_dimensions = &cpi->initial_dimensions;
   RefreshFrameInfo *const refresh_frame = &cpi->refresh_frame;
   const FrameDimensionCfg *const frm_dim_cfg = &cpi->oxcf.frm_dim_cfg;
   const RateControlCfg *const rc_cfg = &oxcf->rc_cfg;
@@ -907,8 +910,8 @@ void av1_change_config(struct AV1_COMP *cpi, const AV1EncoderConfig *oxcf,
   cm->width = frm_dim_cfg->width;
   cm->height = frm_dim_cfg->height;
 
-  if (cm->width > initial_dimensions->width ||
-      cm->height > initial_dimensions->height || is_sb_size_changed) {
+  if (cm->width > cpi->data_alloc_width ||
+      cm->height > cpi->data_alloc_height || is_sb_size_changed) {
     av1_free_context_buffers(cm);
     av1_free_shared_coeff_buffer(&cpi->td.shared_coeff_buf);
     av1_free_sms_tree(&cpi->td);
@@ -916,13 +919,13 @@ void av1_change_config(struct AV1_COMP *cpi, const AV1EncoderConfig *oxcf,
     cpi->td.firstpass_ctx = NULL;
     alloc_compressor_data(cpi);
     realloc_segmentation_maps(cpi);
-    initial_dimensions->width = initial_dimensions->height = 0;
+    cpi->data_alloc_width = cm->width;
+    cpi->data_alloc_height = cm->height;
+    cpi->frame_size_related_setup_done = false;
   }
   av1_update_frame_size(cpi);
 
   rc->is_src_frame_alt_ref = 0;
-
-  set_tile_info(cm, &cpi->oxcf.tile_cfg);
 
   if (!cpi->ppi->rtc_ref.set_ref_frame_config)
     cpi->ext_flags.refresh_frame.update_pending = 0;
@@ -2064,13 +2067,15 @@ static void init_ref_frame_bufs(AV1_COMP *cpi) {
 #endif
 }
 
-void av1_check_initial_width(AV1_COMP *cpi, int use_highbitdepth,
-                             int subsampling_x, int subsampling_y) {
+// TODO(chengchen): consider renaming this function as it is necessary
+// for the encoder to setup critical parameters, and it does not
+// deal with initial width any longer.
+aom_codec_err_t av1_check_initial_width(AV1_COMP *cpi, int use_highbitdepth,
+                                        int subsampling_x, int subsampling_y) {
   AV1_COMMON *const cm = &cpi->common;
   SequenceHeader *const seq_params = cm->seq_params;
-  InitialDimensions *const initial_dimensions = &cpi->initial_dimensions;
 
-  if (!initial_dimensions->width ||
+  if (!cpi->frame_size_related_setup_done ||
       seq_params->use_highbitdepth != use_highbitdepth ||
       seq_params->subsampling_x != subsampling_x ||
       seq_params->subsampling_y != subsampling_y) {
@@ -2083,17 +2088,18 @@ void av1_check_initial_width(AV1_COMP *cpi, int use_highbitdepth,
 
     if (!is_stat_generation_stage(cpi)) {
 #if !CONFIG_REALTIME_ONLY
-      av1_tf_info_alloc(&cpi->ppi->tf_info, cpi);
+      if (!av1_tf_info_alloc(&cpi->ppi->tf_info, cpi))
+        return AOM_CODEC_MEM_ERROR;
 #endif  // !CONFIG_REALTIME_ONLY
     }
     init_ref_frame_bufs(cpi);
 
     init_motion_estimation(cpi);  // TODO(agrange) This can be removed.
 
-    initial_dimensions->width = cm->width;
-    initial_dimensions->height = cm->height;
     cpi->initial_mbs = cm->mi_params.MBs;
+    cpi->frame_size_related_setup_done = true;
   }
+  return AOM_CODEC_OK;
 }
 
 #if CONFIG_AV1_TEMPORAL_DENOISING
@@ -2113,12 +2119,14 @@ static void setup_denoiser_buffer(AV1_COMP *cpi) {
 #endif
 
 // Returns 1 if the assigned width or height was <= 0.
-int av1_set_size_literal(AV1_COMP *cpi, int width, int height) {
+static int set_size_literal(AV1_COMP *cpi, int width, int height) {
   AV1_COMMON *cm = &cpi->common;
-  InitialDimensions *const initial_dimensions = &cpi->initial_dimensions;
-  av1_check_initial_width(cpi, cm->seq_params->use_highbitdepth,
-                          cm->seq_params->subsampling_x,
-                          cm->seq_params->subsampling_y);
+  aom_codec_err_t err = av1_check_initial_width(
+      cpi, cm->seq_params->use_highbitdepth, cm->seq_params->subsampling_x,
+      cm->seq_params->subsampling_y);
+  if (err != AOM_CODEC_OK) {
+    aom_internal_error(cm->error, err, "av1_check_initial_width() failed");
+  }
 
   if (width <= 0 || height <= 0) return 1;
 
@@ -2129,18 +2137,18 @@ int av1_set_size_literal(AV1_COMP *cpi, int width, int height) {
   setup_denoiser_buffer(cpi);
 #endif
 
-  if (initial_dimensions->width && initial_dimensions->height &&
-      (cm->width > initial_dimensions->width ||
-       cm->height > initial_dimensions->height)) {
+  if (cm->width > cpi->data_alloc_width ||
+      cm->height > cpi->data_alloc_height) {
     av1_free_context_buffers(cm);
     av1_free_shared_coeff_buffer(&cpi->td.shared_coeff_buf);
     av1_free_sms_tree(&cpi->td);
     av1_free_pmc(cpi->td.firstpass_ctx, av1_num_planes(cm));
     cpi->td.firstpass_ctx = NULL;
-    alloc_mb_mode_info_buffers(cpi);
     alloc_compressor_data(cpi);
     realloc_segmentation_maps(cpi);
-    initial_dimensions->width = initial_dimensions->height = 0;
+    cpi->data_alloc_width = cm->width;
+    cpi->data_alloc_height = cm->height;
+    cpi->frame_size_related_setup_done = false;
   }
   alloc_mb_mode_info_buffers(cpi);
   av1_update_frame_size(cpi);
@@ -2157,7 +2165,7 @@ void av1_set_frame_size(AV1_COMP *cpi, int width, int height) {
 
   if (width != cm->width || height != cm->height) {
     // There has been a change in the encoded frame size
-    av1_set_size_literal(cpi, width, height);
+    set_size_literal(cpi, width, height);
     // Recalculate 'all_lossless' in case super-resolution was (un)selected.
     cm->features.all_lossless =
         cm->features.coded_lossless && !av1_superres_scaled(cm);
@@ -2586,15 +2594,24 @@ static int encode_without_recode(AV1_COMP *cpi) {
       if (cpi->ref_frame_flags & av1_ref_frame_flag_list[GOLDEN_FRAME]) {
         const YV12_BUFFER_CONFIG *const ref =
             get_ref_frame_yv12_buf(cm, GOLDEN_FRAME);
-        if (ref->y_crop_width != cm->width || ref->y_crop_height != cm->height)
+        if (ref == NULL) {
           cpi->ref_frame_flags ^= AOM_GOLD_FLAG;
+        } else {
+          if (ref->y_crop_width != cm->width ||
+              ref->y_crop_height != cm->height)
+            cpi->ref_frame_flags ^= AOM_GOLD_FLAG;
+        }
       }
     }
     if (cpi->ref_frame_flags & av1_ref_frame_flag_list[ALTREF_FRAME]) {
       const YV12_BUFFER_CONFIG *const ref =
           get_ref_frame_yv12_buf(cm, ALTREF_FRAME);
-      if (ref->y_crop_width != cm->width || ref->y_crop_height != cm->height)
+      if (ref == NULL) {
         cpi->ref_frame_flags ^= AOM_ALT_FLAG;
+      } else {
+        if (ref->y_crop_width != cm->width || ref->y_crop_height != cm->height)
+          cpi->ref_frame_flags ^= AOM_ALT_FLAG;
+      }
     }
   }
 
@@ -4035,16 +4052,16 @@ static int apply_denoise_2d(AV1_COMP *cpi, YV12_BUFFER_CONFIG *sd,
     cpi->denoise_and_model = aom_denoise_and_model_alloc(
         cm->seq_params->bit_depth, block_size, noise_level);
     if (!cpi->denoise_and_model) {
-      aom_internal_error(cm->error, AOM_CODEC_MEM_ERROR,
-                         "Error allocating denoise and model");
+      aom_set_error(cm->error, AOM_CODEC_MEM_ERROR,
+                    "Error allocating denoise and model");
       return -1;
     }
   }
   if (!cpi->film_grain_table) {
     cpi->film_grain_table = aom_malloc(sizeof(*cpi->film_grain_table));
     if (!cpi->film_grain_table) {
-      aom_internal_error(cm->error, AOM_CODEC_MEM_ERROR,
-                         "Error allocating grain table");
+      aom_set_error(cm->error, AOM_CODEC_MEM_ERROR,
+                    "Error allocating grain table");
       return -1;
     }
     memset(cpi->film_grain_table, 0, sizeof(*cpi->film_grain_table));
@@ -4126,8 +4143,7 @@ int av1_receive_raw_frame(AV1_COMP *cpi, aom_enc_frame_flags_t frame_flags,
   if (av1_lookahead_push(cpi->ppi->lookahead, sd, time_stamp, end_time,
                          use_highbitdepth, cpi->image_pyramid_levels,
                          frame_flags)) {
-    aom_internal_error(cm->error, AOM_CODEC_ERROR,
-                       "av1_lookahead_push() failed");
+    aom_set_error(cm->error, AOM_CODEC_ERROR, "av1_lookahead_push() failed");
     res = -1;
   }
 #if CONFIG_INTERNAL_STATS
@@ -4144,21 +4160,21 @@ int av1_receive_raw_frame(AV1_COMP *cpi, aom_enc_frame_flags_t frame_flags,
   // header.
   if ((seq_params->profile == PROFILE_0) && !seq_params->monochrome &&
       (subsampling_x != 1 || subsampling_y != 1)) {
-    aom_internal_error(cm->error, AOM_CODEC_INVALID_PARAM,
-                       "Non-4:2:0 color format requires profile 1 or 2");
+    aom_set_error(cm->error, AOM_CODEC_INVALID_PARAM,
+                  "Non-4:2:0 color format requires profile 1 or 2");
     res = -1;
   }
   if ((seq_params->profile == PROFILE_1) &&
       !(subsampling_x == 0 && subsampling_y == 0)) {
-    aom_internal_error(cm->error, AOM_CODEC_INVALID_PARAM,
-                       "Profile 1 requires 4:4:4 color format");
+    aom_set_error(cm->error, AOM_CODEC_INVALID_PARAM,
+                  "Profile 1 requires 4:4:4 color format");
     res = -1;
   }
   if ((seq_params->profile == PROFILE_2) &&
       (seq_params->bit_depth <= AOM_BITS_10) &&
       !(subsampling_x == 1 && subsampling_y == 0)) {
-    aom_internal_error(cm->error, AOM_CODEC_INVALID_PARAM,
-                       "Profile 2 bit-depth <= 10 requires 4:2:2 color format");
+    aom_set_error(cm->error, AOM_CODEC_INVALID_PARAM,
+                  "Profile 2 bit-depth <= 10 requires 4:2:2 color format");
     res = -1;
   }
 

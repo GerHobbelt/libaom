@@ -23,6 +23,7 @@
 
 #include "aom_dsp/flow_estimation/flow_estimation.h"
 
+#include "av1/av1_cx_iface.h"
 #include "av1/av1_iface_common.h"
 #include "av1/encoder/bitstream.h"
 #include "av1/encoder/encoder.h"
@@ -564,7 +565,10 @@ static void reduce_ratio(aom_rational64_t *ratio) {
   ratio->den /= denom;
 }
 
-// Called by encoder_encode() only. Must not be called by encoder_init().
+// Called by encoder_encode() only. Must not be called by encoder_init()
+// because the `error` paramerer will be destroyed by aom_codec_enc_init_ver()
+// after encoder_init() returns an error. See the "IMPORTANT" comment in
+// aom_codec_enc_init_ver().
 static aom_codec_err_t update_error_state(
     aom_codec_alg_priv_t *ctx, const struct aom_internal_error_info *error) {
   const aom_codec_err_t res = error->error_code;
@@ -947,7 +951,7 @@ static aom_codec_err_t validate_img(aom_codec_alg_priv_t *ctx,
   return AOM_CODEC_OK;
 }
 
-int av1_get_image_bps(const aom_image_t *img) {
+static int get_image_bps(const aom_image_t *img) {
   switch (img->fmt) {
     case AOM_IMG_FMT_YV12:
     case AOM_IMG_FMT_NV12:
@@ -1499,8 +1503,6 @@ AV1EncoderConfig av1_get_encoder_config(const aom_codec_enc_cfg_t *cfg) {
 
 static aom_codec_err_t encoder_set_config(aom_codec_alg_priv_t *ctx,
                                           const aom_codec_enc_cfg_t *cfg) {
-  InitialDimensions *const initial_dimensions =
-      &ctx->ppi->cpi->initial_dimensions;
   aom_codec_err_t res;
   int force_key = 0;
 
@@ -1514,15 +1516,14 @@ static aom_codec_err_t encoder_set_config(aom_codec_alg_priv_t *ctx,
     // to update the frame width and height only when the actual encoding is
     // performed. cpi->last_coded_width and cpi->last_coded_height are used to
     // track the actual coded frame size.
-    if ((ctx->ppi->cpi->last_coded_width && ctx->ppi->cpi->last_coded_height &&
-         !valid_ref_frame_size(ctx->ppi->cpi->last_coded_width,
+    if (ctx->ppi->cpi->last_coded_width && ctx->ppi->cpi->last_coded_height &&
+        (!valid_ref_frame_size(ctx->ppi->cpi->last_coded_width,
                                ctx->ppi->cpi->last_coded_height, cfg->g_w,
-                               cfg->g_h)) ||
-        (initial_dimensions->width &&
-         (int)cfg->g_w > initial_dimensions->width) ||
-        (initial_dimensions->height &&
-         (int)cfg->g_h > initial_dimensions->height))
+                               cfg->g_h) ||
+         ((int)cfg->g_w > ctx->ppi->cpi->last_coded_width) ||
+         ((int)cfg->g_h > ctx->ppi->cpi->last_coded_height))) {
       force_key = 1;
+    }
   }
 
   if (ctx->monochrome_on_init && cfg->monochrome == 0) {
@@ -2621,10 +2622,22 @@ static aom_codec_err_t ctrl_set_max_consec_frame_drop_cbr(
   return AOM_CODEC_OK;
 }
 
+static aom_codec_err_t ctrl_set_svc_frame_drop_mode(aom_codec_alg_priv_t *ctx,
+                                                    va_list args) {
+  AV1_PRIMARY *const ppi = ctx->ppi;
+  AV1_COMP *const cpi = ppi->cpi;
+  cpi->svc.framedrop_mode = CAST(AV1E_SET_SVC_FRAME_DROP_MODE, args);
+  if (cpi->svc.framedrop_mode != AOM_LAYER_DROP &&
+      cpi->svc.framedrop_mode != AOM_FULL_SUPERFRAME_DROP)
+    return AOM_CODEC_INVALID_PARAM;
+  else
+    return AOM_CODEC_OK;
+}
+
 #if !CONFIG_REALTIME_ONLY
-aom_codec_err_t av1_create_stats_buffer(FIRSTPASS_STATS **frame_stats_buffer,
-                                        STATS_BUFFER_CTX *stats_buf_context,
-                                        int num_lap_buffers) {
+static aom_codec_err_t create_stats_buffer(FIRSTPASS_STATS **frame_stats_buffer,
+                                           STATS_BUFFER_CTX *stats_buf_context,
+                                           int num_lap_buffers) {
   aom_codec_err_t res = AOM_CODEC_OK;
 
   int size = get_stats_buf_size(num_lap_buffers, MAX_LAG_BUFFERS);
@@ -2781,8 +2794,8 @@ static aom_codec_err_t encoder_init(aom_codec_ctx_t *ctx) {
       if (!priv->ppi) return AOM_CODEC_MEM_ERROR;
 
 #if !CONFIG_REALTIME_ONLY
-      res = av1_create_stats_buffer(&priv->frame_stats_buffer,
-                                    &priv->stats_buf_context, *num_lap_buffers);
+      res = create_stats_buffer(&priv->frame_stats_buffer,
+                                &priv->stats_buf_context, *num_lap_buffers);
       if (res != AOM_CODEC_OK) return AOM_CODEC_MEM_ERROR;
 
       assert(MAX_LAP_BUFFERS >= MAX_LAG_BUFFERS);
@@ -2831,8 +2844,8 @@ void av1_destroy_context_and_bufferpool(AV1_COMP *cpi,
   }
 }
 
-void av1_destroy_stats_buffer(STATS_BUFFER_CTX *stats_buf_context,
-                              FIRSTPASS_STATS *frame_stats_buffer) {
+static void destroy_stats_buffer(STATS_BUFFER_CTX *stats_buf_context,
+                                 FIRSTPASS_STATS *frame_stats_buffer) {
   aom_free(stats_buf_context->total_left_stats);
   aom_free(stats_buf_context->total_stats);
   aom_free(frame_stats_buffer);
@@ -2893,7 +2906,7 @@ static aom_codec_err_t encoder_destroy(aom_codec_alg_priv_t *ctx) {
     }
     av1_remove_primary_compressor(ppi);
   }
-  av1_destroy_stats_buffer(&ctx->stats_buf_context, ctx->frame_stats_buffer);
+  destroy_stats_buffer(&ctx->stats_buf_context, ctx->frame_stats_buffer);
   aom_free(ctx);
   return AOM_CODEC_OK;
 }
@@ -2961,8 +2974,7 @@ static aom_codec_err_t encoder_encode(aom_codec_alg_priv_t *ctx,
     if (res == AOM_CODEC_OK) {
       const size_t uncompressed_frame_sz =
           ALIGN_POWER_OF_TWO_UNSIGNED(ctx->cfg.g_w, 5) *
-          ALIGN_POWER_OF_TWO_UNSIGNED(ctx->cfg.g_h, 5) *
-          av1_get_image_bps(img) / 8;
+          ALIGN_POWER_OF_TWO_UNSIGNED(ctx->cfg.g_h, 5) * get_image_bps(img) / 8;
 
       // Due to the presence of no-show frames, the ctx->cx_data buffer holds
       // compressed data corresponding to multiple frames. As no-show frames are
@@ -3104,12 +3116,21 @@ static aom_codec_err_t encoder_encode(aom_codec_alg_priv_t *ctx,
         aom_internal_error(&ppi->error, AOM_CODEC_MEM_ERROR,
                            "Failed to allocate lag buffers");
       for (int i = 0; i < ppi->num_fp_contexts; i++) {
-        av1_check_initial_width(ppi->parallel_cpi[i], use_highbitdepth,
-                                subsampling_x, subsampling_y);
+        aom_codec_err_t err =
+            av1_check_initial_width(ppi->parallel_cpi[i], use_highbitdepth,
+                                    subsampling_x, subsampling_y);
+        if (err != AOM_CODEC_OK) {
+          aom_internal_error(&ppi->error, err,
+                             "av1_check_initial_width() failed");
+        }
       }
       if (cpi_lap != NULL) {
-        av1_check_initial_width(cpi_lap, use_highbitdepth, subsampling_x,
-                                subsampling_y);
+        aom_codec_err_t err = av1_check_initial_width(
+            cpi_lap, use_highbitdepth, subsampling_x, subsampling_y);
+        if (err != AOM_CODEC_OK) {
+          aom_internal_error(&ppi->error, err,
+                             "av1_check_initial_width() failed");
+        }
       }
 
       // Store the original flags in to the frame buffer. Will extract the
@@ -3173,17 +3194,6 @@ static aom_codec_err_t encoder_encode(aom_codec_alg_priv_t *ctx,
       av1_create_workers(ppi, num_workers);
       av1_init_tile_thread_data(ppi, cpi->oxcf.pass == AOM_RC_FIRST_PASS);
     }
-#if CONFIG_MULTITHREAD
-    if (ppi->p_mt_info.num_workers > 1) {
-      for (int i = 0; i < ppi->num_fp_contexts; i++) {
-        av1_init_mt_sync(ppi->parallel_cpi[i],
-                         ppi->parallel_cpi[i]->oxcf.pass == AOM_RC_FIRST_PASS);
-      }
-      if (cpi_lap != NULL) {
-        av1_init_mt_sync(cpi_lap, 1);
-      }
-    }
-#endif  // CONFIG_MULTITHREAD
 
     // Re-allocate thread data if workers for encoder multi-threading stage
     // exceeds prev_num_enc_workers.
@@ -3205,6 +3215,17 @@ static aom_codec_err_t encoder_encode(aom_codec_alg_priv_t *ctx,
     if (cpi_lap != NULL) {
       av1_init_frame_mt(ppi, cpi_lap);
     }
+#if CONFIG_MULTITHREAD
+    if (ppi->p_mt_info.num_workers > 1) {
+      for (int i = 0; i < ppi->num_fp_contexts; i++) {
+        av1_init_mt_sync(ppi->parallel_cpi[i],
+                         ppi->parallel_cpi[i]->oxcf.pass == AOM_RC_FIRST_PASS);
+      }
+      if (cpi_lap != NULL) {
+        av1_init_mt_sync(cpi_lap, 1);
+      }
+    }
+#endif  // CONFIG_MULTITHREAD
 
     // Call for LAP stage
     if (cpi_lap != NULL) {
@@ -3212,11 +3233,8 @@ static aom_codec_err_t encoder_encode(aom_codec_alg_priv_t *ctx,
       cpi_lap_data.flush = !img;
       cpi_lap_data.timestamp_ratio = &ctx->timestamp_ratio;
       const int status = av1_get_compressed_data(cpi_lap, &cpi_lap_data);
-      if (status != -1) {
-        if (status != AOM_CODEC_OK) {
-          aom_internal_error(&ppi->error, cpi->common.error->error_code, "%s",
-                             cpi->common.error->detail);
-        }
+      if (status > AOM_CODEC_OK) {
+        aom_internal_error_copy(&ppi->error, cpi_lap->common.error);
       }
       av1_post_encode_updates(cpi_lap, &cpi_lap_data);
     }
@@ -3257,16 +3275,20 @@ static aom_codec_err_t encoder_encode(aom_codec_alg_priv_t *ctx,
           status = av1_get_compressed_data(cpi, &cpi_data);
         } else if (ppi->gf_group.frame_parallel_level[cpi->gf_frame_index] ==
                    1) {
-          status = av1_compress_parallel_frames(ppi, &cpi_data);
+          // In case of an error, longjmp() would be invoked and hence "status"
+          // is set to AOM_CODEC_OK here.
+          av1_compress_parallel_frames(ppi, &cpi_data);
+          status = AOM_CODEC_OK;
         } else {
+          // No possibility of failures from this function and hence "status" is
+          // set to AOM_CODEC_OK here.
           cpi = av1_get_parallel_frame_enc_data(ppi, &cpi_data);
           status = AOM_CODEC_OK;
         }
       }
       if (status == -1) break;
       if (status != AOM_CODEC_OK) {
-        aom_internal_error(&ppi->error, cpi->common.error->error_code, "%s",
-                           cpi->common.error->detail);
+        aom_internal_error_copy(&ppi->error, cpi->common.error);
       }
       if (ppi->num_fp_contexts > 0 && frame_is_intra_only(&cpi->common)) {
         av1_init_sc_decisions(ppi);
@@ -4416,6 +4438,7 @@ static aom_codec_ctrl_fn_map_t encoder_ctrl_maps[] = {
   { AV1E_SET_QUANTIZER_ONE_PASS, ctrl_set_quantizer_one_pass },
   { AV1E_SET_BITRATE_ONE_PASS_CBR, ctrl_set_bitrate_one_pass_cbr },
   { AV1E_SET_MAX_CONSEC_FRAME_DROP_CBR, ctrl_set_max_consec_frame_drop_cbr },
+  { AV1E_SET_SVC_FRAME_DROP_MODE, ctrl_set_svc_frame_drop_mode },
 
   // Getters
   { AOME_GET_LAST_QUANTIZER, ctrl_get_quantizer },
