@@ -71,6 +71,13 @@ typedef struct AV1TplRowMultiThreadSync {
 } AV1TplRowMultiThreadSync;
 
 typedef struct AV1TplRowMultiThreadInfo {
+  // Initialized to false, set to true by the worker thread that encounters an
+  // error in order to abort the processing of other worker threads.
+  bool tpl_mt_exit;
+#if CONFIG_MULTITHREAD
+  // Mutex lock object used for error handling.
+  pthread_mutex_t *mutex_;
+#endif
   // Row synchronization related function pointers.
   void (*sync_read_ptr)(AV1TplRowMultiThreadSync *tpl_mt_sync, int r, int c);
   void (*sync_write_ptr)(AV1TplRowMultiThreadSync *tpl_mt_sync, int r, int c,
@@ -146,6 +153,8 @@ typedef struct TplDepFrame {
   int mi_cols;
   int base_rdmult;
   uint32_t frame_display_index;
+  // When set, SAD metric is used for intra and inter mode decision.
+  int use_pred_sad;
 } TplDepFrame;
 
 /*!\endcond */
@@ -237,9 +246,9 @@ typedef struct TplParams {
   int border_in_pixels;
 
   /*!
-   * When set, SAD metric is used for intra and inter mode decision.
+   * Factor to adjust r0 if TPL uses a subset of frames in the gf group.
    */
-  int use_pred_sad;
+  double r0_adjust_factor;
 } TplParams;
 
 #if CONFIG_BITRATE_ACCURACY || CONFIG_RATECTRL_LOG
@@ -408,10 +417,15 @@ void av1_setup_tpl_buffers(struct AV1_PRIMARY *const ppi,
 
 static AOM_INLINE void tpl_dealloc_temp_buffers(TplBuffers *tpl_tmp_buffers) {
   aom_free(tpl_tmp_buffers->predictor8);
+  tpl_tmp_buffers->predictor8 = NULL;
   aom_free(tpl_tmp_buffers->src_diff);
+  tpl_tmp_buffers->src_diff = NULL;
   aom_free(tpl_tmp_buffers->coeff);
+  tpl_tmp_buffers->coeff = NULL;
   aom_free(tpl_tmp_buffers->qcoeff);
+  tpl_tmp_buffers->qcoeff = NULL;
   aom_free(tpl_tmp_buffers->dqcoeff);
+  tpl_tmp_buffers->dqcoeff = NULL;
 }
 
 static AOM_INLINE bool tpl_alloc_temp_buffers(TplBuffers *tpl_tmp_buffers,

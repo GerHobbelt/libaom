@@ -1088,9 +1088,6 @@ typedef struct AV1EncoderConfig {
 
   // A flag to control if we enable the superblock qp sweep for a given lambda
   int sb_qp_sweep;
-
-  // Selected global motion search method
-  GlobalMotionMethod global_motion_method;
   /*!\endcond */
 } AV1EncoderConfig;
 
@@ -1469,6 +1466,7 @@ typedef struct ThreadData {
   TemporalFilterData tf_data;
   TplBuffers tpl_tmp_buffers;
   TplTxfmStats tpl_txfm_stats;
+  GlobalMotionData gm_data;
   // Pointer to the array of structures to store gradient information of each
   // pixel in a superblock. The buffer constitutes of MAX_SB_SQUARE pixel level
   // structures for each of the plane types (PLANE_TYPE_Y and PLANE_TYPE_UV).

@@ -57,8 +57,8 @@ typedef std::tuple<TemporalFilterFuncParam, int> TemporalFilterWithParam;
 class TemporalFilterTest
     : public ::testing::TestWithParam<TemporalFilterWithParam> {
  public:
-  virtual ~TemporalFilterTest() {}
-  virtual void SetUp() {
+  ~TemporalFilterTest() override = default;
+  void SetUp() override {
     params_ = GET_PARAM(0);
     tf_wgt_calc_lvl_ = GET_PARAM(1);
     rnd_.Reset(ACMRandom::DeterministicSeed());
@@ -71,7 +71,7 @@ class TemporalFilterTest
     ASSERT_NE(src2_, nullptr);
   }
 
-  virtual void TearDown() {
+  void TearDown() override {
     aom_free(src1_);
     aom_free(src2_);
   }
@@ -308,6 +308,16 @@ INSTANTIATE_TEST_SUITE_P(NEON, TemporalFilterTest,
                                  Values(0, 1)));
 #endif  // HAVE_NEON
 
+#if HAVE_NEON_DOTPROD
+TemporalFilterFuncParam temporal_filter_test_neon_dotprod[] = {
+  TemporalFilterFuncParam(&av1_apply_temporal_filter_c,
+                          &av1_apply_temporal_filter_neon_dotprod)
+};
+INSTANTIATE_TEST_SUITE_P(NEON_DOTPROD, TemporalFilterTest,
+                         Combine(ValuesIn(temporal_filter_test_neon_dotprod),
+                                 Values(0, 1)));
+#endif  // HAVE_NEON_DOTPROD
+
 typedef double (*EstimateNoiseFunc)(const uint8_t *src, int height, int width,
                                     int stride, int edge_thresh);
 
@@ -317,8 +327,8 @@ typedef std::tuple<EstimateNoiseFunc, EstimateNoiseFunc, int, int>
 class EstimateNoiseTest
     : public ::testing::TestWithParam<EstimateNoiseWithParam> {
  public:
-  virtual ~EstimateNoiseTest() {}
-  virtual void SetUp() {
+  ~EstimateNoiseTest() override = default;
+  void SetUp() override {
     ref_func = GET_PARAM(0);
     tst_func = GET_PARAM(1);
     width_ = GET_PARAM(2);
@@ -330,7 +340,7 @@ class EstimateNoiseTest
     ASSERT_NE(src1_, nullptr);
   }
 
-  virtual void TearDown() { aom_free(src1_); }
+  void TearDown() override { aom_free(src1_); }
 
   void RunTest(int run_times) {
     stride_ = width_;
@@ -416,8 +426,8 @@ typedef std::tuple<HBDTemporalFilterFuncParam, int> HBDTemporalFilterWithParam;
 class HBDTemporalFilterTest
     : public ::testing::TestWithParam<HBDTemporalFilterWithParam> {
  public:
-  virtual ~HBDTemporalFilterTest() {}
-  virtual void SetUp() {
+  ~HBDTemporalFilterTest() override = default;
+  void SetUp() override {
     params_ = GET_PARAM(0);
     tf_wgt_calc_lvl_ = GET_PARAM(1);
     rnd_.Reset(ACMRandom::DeterministicSeed());
@@ -430,7 +440,7 @@ class HBDTemporalFilterTest
     ASSERT_NE(src2_, nullptr);
   }
 
-  virtual void TearDown() {
+  void TearDown() override {
     aom_free(src1_);
     aom_free(src2_);
   }
@@ -664,6 +674,16 @@ INSTANTIATE_TEST_SUITE_P(AVX2, HBDTemporalFilterTest,
                          Combine(ValuesIn(HBDtemporal_filter_test_avx2),
                                  Values(0, 1)));
 #endif  // HAVE_AVX2
+
+#if HAVE_NEON
+HBDTemporalFilterFuncParam HBDtemporal_filter_test_neon[] = {
+  HBDTemporalFilterFuncParam(&av1_highbd_apply_temporal_filter_c,
+                             &av1_highbd_apply_temporal_filter_neon)
+};
+INSTANTIATE_TEST_SUITE_P(NEON, HBDTemporalFilterTest,
+                         Combine(ValuesIn(HBDtemporal_filter_test_neon),
+                                 Values(0, 1)));
+#endif  // HAVE_NEON
 #endif  // CONFIG_AV1_HIGHBITDEPTH
 }  // namespace
 #endif

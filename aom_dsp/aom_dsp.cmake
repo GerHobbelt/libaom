@@ -198,6 +198,9 @@ if(CONFIG_AV1_ENCODER)
 
     list(APPEND AOM_DSP_ENCODER_INTRIN_AVX2
                 "${AOM_ROOT}/aom_dsp/flow_estimation/x86/corner_match_avx2.c")
+
+    list(APPEND AOM_DSP_ENCODER_INTRIN_NEON
+                "${AOM_ROOT}/aom_dsp/flow_estimation/arm/disflow_neon.c")
   endif()
 
   list(APPEND AOM_DSP_ENCODER_ASM_SSE2 "${AOM_ROOT}/aom_dsp/x86/sad4d_sse2.asm"
@@ -279,6 +282,13 @@ if(CONFIG_AV1_ENCODER)
               "${AOM_ROOT}/aom_dsp/arm/sum_squares_neon.c"
               "${AOM_ROOT}/aom_dsp/arm/blk_sse_sum_neon.c")
 
+  list(APPEND AOM_DSP_ENCODER_INTRIN_NEON_DOTPROD
+              "${AOM_ROOT}/aom_dsp/arm/sad_neon_dotprod.c"
+              "${AOM_ROOT}/aom_dsp/arm/sadxd_neon_dotprod.c"
+              "${AOM_ROOT}/aom_dsp/arm/sse_neon_dotprod.c"
+              "${AOM_ROOT}/aom_dsp/arm/sum_squares_neon_dotprod.c"
+              "${AOM_ROOT}/aom_dsp/arm/variance_neon_dotprod.c")
+
   if(CONFIG_AV1_HIGHBITDEPTH)
     list(APPEND AOM_DSP_ENCODER_ASM_SSE2
                 "${AOM_ROOT}/aom_dsp/x86/highbd_sad4d_sse2.asm"
@@ -304,11 +314,15 @@ if(CONFIG_AV1_ENCODER)
                 "${AOM_ROOT}/aom_dsp/arm/highbd_hadamard_neon.c"
                 "${AOM_ROOT}/aom_dsp/arm/highbd_masked_sad_neon.c"
                 "${AOM_ROOT}/aom_dsp/arm/highbd_obmc_sad_neon.c"
+                "${AOM_ROOT}/aom_dsp/arm/highbd_obmc_variance_neon.c"
                 "${AOM_ROOT}/aom_dsp/arm/highbd_quantize_neon.c"
                 "${AOM_ROOT}/aom_dsp/arm/highbd_sad_neon.c"
                 "${AOM_ROOT}/aom_dsp/arm/highbd_sadxd_neon.c"
                 "${AOM_ROOT}/aom_dsp/arm/highbd_subpel_variance_neon.c"
                 "${AOM_ROOT}/aom_dsp/arm/highbd_variance_neon.c")
+
+    list(APPEND AOM_DSP_ENCODER_INTRIN_NEON_DOTPROD
+                "${AOM_ROOT}/aom_dsp/arm/highbd_variance_neon_dotprod.c")
   endif()
 
   if(CONFIG_INTERNAL_STATS)
@@ -338,6 +352,10 @@ if(CONFIG_AV1_ENCODER)
 
     list(REMOVE_ITEM AOM_DSP_ENCODER_INTRIN_SSE2
                      "${AOM_ROOT}/aom_dsp/x86/adaptive_quantize_sse2.c")
+
+    list(REMOVE_ITEM AOM_DSP_ENCODER_INTRIN_NEON
+                     "${AOM_ROOT}/aom_dsp/arm/highbd_obmc_variance_neon.c"
+                     "${AOM_ROOT}/aom_dsp/arm/obmc_variance_neon.c")
   endif()
 endif()
 
@@ -449,6 +467,11 @@ function(setup_aom_dsp_targets)
     add_intrinsics_object_library("${AOM_NEON_DOTPROD_FLAG}" "neon_dotprod"
                                   "aom_dsp_common"
                                   "AOM_DSP_COMMON_INTRIN_NEON_DOTPROD")
+    if(CONFIG_AV1_ENCODER)
+      add_intrinsics_object_library("${AOM_NEON_DOTPROD_FLAG}" "neon_dotprod"
+                                    "aom_dsp_encoder"
+                                    "AOM_DSP_ENCODER_INTRIN_NEON_DOTPROD")
+    endif()
   endif()
 
   if(HAVE_NEON_I8MM)

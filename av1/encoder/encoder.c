@@ -946,7 +946,7 @@ void av1_change_config(struct AV1_COMP *cpi, const AV1EncoderConfig *oxcf,
 #else
   if (oxcf->tool_cfg.enable_global_motion) {
     cpi->image_pyramid_levels =
-        global_motion_pyr_levels[oxcf->global_motion_method];
+        global_motion_pyr_levels[default_global_motion_method];
   } else {
     cpi->image_pyramid_levels = 0;
   }
@@ -1699,6 +1699,7 @@ void av1_remove_compressor(AV1_COMP *cpi) {
   pthread_mutex_t *const enc_row_mt_mutex_ = mt_info->enc_row_mt.mutex_;
   pthread_cond_t *const enc_row_mt_cond_ = mt_info->enc_row_mt.cond_;
   pthread_mutex_t *const gm_mt_mutex_ = mt_info->gm_sync.mutex_;
+  pthread_mutex_t *const tpl_error_mutex_ = mt_info->tpl_row_mt.mutex_;
   pthread_mutex_t *const pack_bs_mt_mutex_ = mt_info->pack_bs_sync.mutex_;
   if (enc_row_mt_mutex_ != NULL) {
     pthread_mutex_destroy(enc_row_mt_mutex_);
@@ -1711,6 +1712,10 @@ void av1_remove_compressor(AV1_COMP *cpi) {
   if (gm_mt_mutex_ != NULL) {
     pthread_mutex_destroy(gm_mt_mutex_);
     aom_free(gm_mt_mutex_);
+  }
+  if (tpl_error_mutex_ != NULL) {
+    pthread_mutex_destroy(tpl_error_mutex_);
+    aom_free(tpl_error_mutex_);
   }
   if (pack_bs_mt_mutex_ != NULL) {
     pthread_mutex_destroy(pack_bs_mt_mutex_);
@@ -1726,7 +1731,6 @@ void av1_remove_compressor(AV1_COMP *cpi) {
     int num_lr_workers =
         av1_get_num_mod_workers_for_alloc(&cpi->ppi->p_mt_info, MOD_LR);
     av1_loop_restoration_dealloc(&mt_info->lr_row_sync, num_lr_workers);
-    av1_gm_dealloc(&mt_info->gm_sync);
     av1_tf_mt_dealloc(&mt_info->tf_sync);
 #endif
   }
@@ -2060,10 +2064,7 @@ static void set_restoration_unit_size(int width, int height, int sx, int sy,
   int s = 0;
 #endif  // !COUPLED_CHROMA_FROM_LUMA_RESTORATION
 
-  if (width * height > 352 * 288)
-    rst[0].restoration_unit_size = RESTORATION_UNITSIZE_MAX;
-  else
-    rst[0].restoration_unit_size = (RESTORATION_UNITSIZE_MAX >> 1);
+  rst[0].restoration_unit_size = RESTORATION_UNITSIZE_MAX;
   rst[1].restoration_unit_size = rst[0].restoration_unit_size >> s;
   rst[2].restoration_unit_size = rst[1].restoration_unit_size;
 }
@@ -2625,16 +2626,9 @@ static int encode_without_recode(AV1_COMP *cpi) {
 #endif  // CONFIG_FPMT_TEST
   if (scale_references ||
       cpi->ppi->gf_group.frame_parallel_level[cpi->gf_frame_index] == 0) {
-    // For SVC the inter-layer/spatial prediction is not done for newmv
-    // (zero_mode is forced), and since the scaled references are only
-    // use for newmv search, we can avoid scaling here when
-    // force_zero_mode_spatial_ref is set for SVC mode.
-    // Also add condition for dynamic_resize: for dynamic_resize we always
-    // check for scaling references for now.
-    if (!frame_is_intra_only(cm) &&
-        (!cpi->ppi->use_svc || !cpi->svc.force_zero_mode_spatial_ref ||
-         cpi->oxcf.resize_cfg.resize_mode == RESIZE_DYNAMIC))
+    if (!frame_is_intra_only(cm)) {
       av1_scale_references(cpi, filter_scaler, phase_scaler, 1);
+    }
   }
 
   av1_set_quantizer(cm, q_cfg->qm_minlevel, q_cfg->qm_maxlevel, q,

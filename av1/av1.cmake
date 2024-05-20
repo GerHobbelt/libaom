@@ -368,6 +368,9 @@ list(APPEND AOM_AV1_ENCODER_INTRIN_NEON
             "${AOM_ROOT}/av1/encoder/arm/neon/reconinter_enc_neon.c"
             "${AOM_ROOT}/av1/encoder/arm/neon/temporal_filter_neon.c")
 
+list(APPEND AOM_AV1_ENCODER_INTRIN_NEON_DOTPROD
+            "${AOM_ROOT}/av1/encoder/arm/neon/temporal_filter_neon_dotprod.c")
+
 list(APPEND AOM_AV1_ENCODER_INTRIN_ARM_CRC32
             "${AOM_ROOT}/av1/encoder/arm/crc32/hash_crc32.c")
 
@@ -379,16 +382,22 @@ list(APPEND AOM_AV1_COMMON_INTRIN_NEON
             "${AOM_ROOT}/av1/common/arm/blend_a64_vmask_neon.c"
             "${AOM_ROOT}/av1/common/arm/cdef_block_neon.c"
             "${AOM_ROOT}/av1/common/arm/cfl_neon.c"
+            "${AOM_ROOT}/av1/common/arm/compound_convolve_neon.c"
             "${AOM_ROOT}/av1/common/arm/convolve_neon.c"
             "${AOM_ROOT}/av1/common/arm/convolve_neon.h"
             "${AOM_ROOT}/av1/common/arm/highbd_inv_txfm_neon.c"
-            "${AOM_ROOT}/av1/common/arm/jnt_convolve_neon.c"
             "${AOM_ROOT}/av1/common/arm/reconinter_neon.c"
             "${AOM_ROOT}/av1/common/arm/reconintra_neon.c"
             "${AOM_ROOT}/av1/common/arm/resize_neon.c"
             "${AOM_ROOT}/av1/common/arm/selfguided_neon.c"
             "${AOM_ROOT}/av1/common/arm/warp_plane_neon.c"
             "${AOM_ROOT}/av1/common/arm/wiener_convolve_neon.c")
+
+list(APPEND AOM_AV1_COMMON_INTRIN_NEON_DOTPROD
+            "${AOM_ROOT}/av1/common/arm/compound_convolve_neon_dotprod.c")
+
+list(APPEND AOM_AV1_COMMON_INTRIN_NEON_I8MM
+            "${AOM_ROOT}/av1/common/arm/compound_convolve_neon_i8mm.c")
 
 list(APPEND AOM_AV1_ENCODER_INTRIN_SSE4_2
             "${AOM_ROOT}/av1/encoder/x86/hash_sse42.c")
@@ -463,6 +472,9 @@ if(CONFIG_AV1_HIGHBITDEPTH)
               "${AOM_ROOT}/av1/encoder/x86/av1_highbd_quantize_avx2.c"
               "${AOM_ROOT}/av1/encoder/x86/highbd_block_error_intrin_avx2.c"
               "${AOM_ROOT}/av1/encoder/x86/highbd_temporal_filter_avx2.c")
+
+  list(APPEND AOM_AV1_ENCODER_INTRIN_NEON
+              "${AOM_ROOT}/av1/encoder/arm/neon/highbd_temporal_filter_neon.c")
 endif()
 
 if(CONFIG_ACCOUNTING)
@@ -631,29 +643,38 @@ function(setup_av1_targets)
   endif()
 
   if(HAVE_NEON)
-    if(AOM_AV1_COMMON_INTRIN_NEON)
-      add_intrinsics_object_library("${AOM_NEON_INTRIN_FLAG}" "neon"
-                                    "aom_av1_common"
-                                    "AOM_AV1_COMMON_INTRIN_NEON")
-    endif()
-
+    add_intrinsics_object_library("${AOM_NEON_INTRIN_FLAG}" "neon"
+                                  "aom_av1_common" "AOM_AV1_COMMON_INTRIN_NEON")
     if(CONFIG_AV1_ENCODER)
-      if(AOM_AV1_ENCODER_INTRIN_NEON)
-        add_intrinsics_object_library("${AOM_NEON_INTRIN_FLAG}" "neon"
-                                      "aom_av1_encoder"
-                                      "AOM_AV1_ENCODER_INTRIN_NEON")
-      endif()
+      add_intrinsics_object_library("${AOM_NEON_INTRIN_FLAG}" "neon"
+                                    "aom_av1_encoder"
+                                    "AOM_AV1_ENCODER_INTRIN_NEON")
     endif()
+  endif()
 
-    if(HAVE_ARM_CRC32)
-      if(CONFIG_AV1_ENCODER)
-        if(AOM_AV1_ENCODER_INTRIN_ARM_CRC32)
-          add_intrinsics_object_library("${AOM_ARM_CRC32_FLAG}" "crc32"
-                                        "aom_av1_encoder"
-                                        "AOM_AV1_ENCODER_INTRIN_ARM_CRC32")
-        endif()
-      endif()
+  if(HAVE_ARM_CRC32)
+    if(CONFIG_AV1_ENCODER)
+      add_intrinsics_object_library("${AOM_ARM_CRC32_FLAG}" "crc32"
+                                    "aom_av1_encoder"
+                                    "AOM_AV1_ENCODER_INTRIN_ARM_CRC32")
     endif()
+  endif()
+
+  if(HAVE_NEON_DOTPROD)
+    add_intrinsics_object_library("${AOM_NEON_DOTPROD_FLAG}" "neon_dotprod"
+                                  "aom_av1_common"
+                                  "AOM_AV1_COMMON_INTRIN_NEON_DOTPROD")
+    if(CONFIG_AV1_ENCODER)
+      add_intrinsics_object_library("${AOM_NEON_DOTPROD_FLAG}" "neon_dotprod"
+                                    "aom_av1_encoder"
+                                    "AOM_AV1_ENCODER_INTRIN_NEON_DOTPROD")
+    endif()
+  endif()
+
+  if(HAVE_NEON_I8MM)
+    add_intrinsics_object_library("${AOM_NEON_I8MM_FLAG}" "neon_i8mm"
+                                  "aom_av1_common"
+                                  "AOM_AV1_COMMON_INTRIN_NEON_I8MM")
   endif()
 
   if(HAVE_VSX)

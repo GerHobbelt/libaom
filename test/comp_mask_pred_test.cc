@@ -48,10 +48,10 @@ const BLOCK_SIZE kCompMaskPredParams[] = {
 
 class AV1CompMaskPredBase : public ::testing::Test {
  public:
-  ~AV1CompMaskPredBase();
-  void SetUp();
+  ~AV1CompMaskPredBase() override;
+  void SetUp() override;
 
-  void TearDown();
+  void TearDown() override;
 
  protected:
   bool CheckResult(int width, int height) {
@@ -76,7 +76,7 @@ class AV1CompMaskPredBase : public ::testing::Test {
   uint8_t *ref_;
 };
 
-AV1CompMaskPredBase::~AV1CompMaskPredBase() {}
+AV1CompMaskPredBase::~AV1CompMaskPredBase() = default;
 
 void AV1CompMaskPredBase::SetUp() {
   rnd_.Reset(libaom_test::ACMRandom::DeterministicSeed());
@@ -303,10 +303,10 @@ typedef std::tuple<comp_avg_pred_func, BLOCK_SIZE> CompAvgPredParam;
 
 class AV1CompAvgPredTest : public ::testing::TestWithParam<CompAvgPredParam> {
  public:
-  ~AV1CompAvgPredTest();
-  void SetUp();
+  ~AV1CompAvgPredTest() override;
+  void SetUp() override;
 
-  void TearDown();
+  void TearDown() override;
 
  protected:
   void RunCheckOutput(comp_avg_pred_func test_impl, BLOCK_SIZE bsize);
@@ -333,7 +333,7 @@ class AV1CompAvgPredTest : public ::testing::TestWithParam<CompAvgPredParam> {
 };
 GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(AV1CompAvgPredTest);
 
-AV1CompAvgPredTest::~AV1CompAvgPredTest() {}
+AV1CompAvgPredTest::~AV1CompAvgPredTest() = default;
 
 void AV1CompAvgPredTest::SetUp() {
   rnd_.Reset(libaom_test::ACMRandom::DeterministicSeed());
@@ -420,10 +420,10 @@ INSTANTIATE_TEST_SUITE_P(
 #if CONFIG_AV1_HIGHBITDEPTH
 class AV1HighbdCompMaskPredTestBase : public ::testing::Test {
  public:
-  ~AV1HighbdCompMaskPredTestBase();
-  void SetUp();
+  ~AV1HighbdCompMaskPredTestBase() override;
+  void SetUp() override;
 
-  void TearDown();
+  void TearDown() override;
 
  protected:
   bool CheckResult(int width, int height) {
@@ -448,7 +448,7 @@ class AV1HighbdCompMaskPredTestBase : public ::testing::Test {
   uint16_t *ref_;
 };
 
-AV1HighbdCompMaskPredTestBase::~AV1HighbdCompMaskPredTestBase() {}
+AV1HighbdCompMaskPredTestBase::~AV1HighbdCompMaskPredTestBase() = default;
 
 void AV1HighbdCompMaskPredTestBase::SetUp() {
   rnd_.Reset(libaom_test::ACMRandom::DeterministicSeed());
@@ -494,14 +494,14 @@ class AV1HighbdCompMaskPredTest
     : public AV1HighbdCompMaskPredTestBase,
       public ::testing::WithParamInterface<HighbdCompMaskPredParam> {
  public:
-  ~AV1HighbdCompMaskPredTest();
+  ~AV1HighbdCompMaskPredTest() override;
 
  protected:
   void RunCheckOutput(comp_mask_pred_func test_impl, BLOCK_SIZE bsize, int inv);
   void RunSpeedTest(comp_mask_pred_func test_impl, BLOCK_SIZE bsize);
 };
 
-AV1HighbdCompMaskPredTest::~AV1HighbdCompMaskPredTest() {}
+AV1HighbdCompMaskPredTest::~AV1HighbdCompMaskPredTest() = default;
 
 void AV1HighbdCompMaskPredTest::RunCheckOutput(
     highbd_comp_mask_pred_func test_impl, BLOCK_SIZE bsize, int inv) {
@@ -620,7 +620,7 @@ class AV1HighbdUpsampledPredTest
     : public AV1HighbdCompMaskPredTestBase,
       public ::testing::WithParamInterface<HighbdUpsampledPredParam> {
  public:
-  ~AV1HighbdUpsampledPredTest();
+  ~AV1HighbdUpsampledPredTest() override;
 
  protected:
   void RunCheckOutput(highbd_upsampled_pred_func test_impl, BLOCK_SIZE bsize);
@@ -628,7 +628,7 @@ class AV1HighbdUpsampledPredTest
                     int havSub);
 };
 
-AV1HighbdUpsampledPredTest::~AV1HighbdUpsampledPredTest() {}
+AV1HighbdUpsampledPredTest::~AV1HighbdUpsampledPredTest() = default;
 
 void AV1HighbdUpsampledPredTest::RunCheckOutput(
     highbd_upsampled_pred_func test_impl, BLOCK_SIZE bsize) {

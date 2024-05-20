@@ -39,7 +39,7 @@ void generate_warped_model(libaom_test::ACMRandom *rnd, int32_t *mat,
                            int16_t *delta, const int is_alpha_zero,
                            const int is_beta_zero, const int is_gamma_zero,
                            const int is_delta_zero, const int rnd_gen_zeros) {
-  while (1) {
+  while (true) {
     int rnd8 = rnd->Rand8() & 3;
     mat[0] = random_warped_param(rnd, WARPEDMODEL_PREC_BITS + 6, rnd_gen_zeros);
     mat[1] = random_warped_param(rnd, WARPEDMODEL_PREC_BITS + 6, rnd_gen_zeros);
@@ -127,7 +127,7 @@ namespace AV1WarpFilter {
                             ::testing::Values(0, 1), ::testing::Values(0, 1));
 }
 
-AV1WarpFilterTest::~AV1WarpFilterTest() {}
+AV1WarpFilterTest::~AV1WarpFilterTest() = default;
 void AV1WarpFilterTest::SetUp() { rnd_.Reset(ACMRandom::DeterministicSeed()); }
 
 void AV1WarpFilterTest::TearDown() {}
@@ -319,7 +319,7 @@ namespace AV1HighbdWarpFilter {
                             ::testing::Values(0, 1), ::testing::Values(0, 1));
 }
 
-AV1HighbdWarpFilterTest::~AV1HighbdWarpFilterTest() {}
+AV1HighbdWarpFilterTest::~AV1HighbdWarpFilterTest() = default;
 void AV1HighbdWarpFilterTest::SetUp() {
   rnd_.Reset(ACMRandom::DeterministicSeed());
 }

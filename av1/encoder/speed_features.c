@@ -847,6 +847,10 @@ static void set_good_speed_feature_framesize_dependent(
     } else {
       sf->inter_sf.prune_nearmv_using_neighbors = PRUNE_NEARMV_LEVEL2;
     }
+
+    if (is_720p_or_larger)
+      sf->part_sf.ext_part_eval_based_on_cur_best =
+          (allow_screen_content_tools || frame_is_intra_only(cm)) ? 0 : 1;
   }
 
   if (speed >= 6) {
@@ -861,6 +865,10 @@ static void set_good_speed_feature_framesize_dependent(
       sf->part_sf.auto_max_partition_based_on_simple_motion = NOT_IN_USE;
     } else if (is_480p_or_larger) {
       sf->part_sf.auto_max_partition_based_on_simple_motion = DIRECT_PRED;
+    }
+
+    if (is_480p_or_larger) {
+      sf->hl_sf.allow_sub_blk_me_in_tf = 1;
     }
 
     if (is_1080p_or_larger) {
@@ -893,6 +901,10 @@ static void set_good_speed_feature_framesize_dependent(
     if (!is_720p_or_larger) {
       sf->tx_sf.tx_type_search.fast_inter_tx_type_prob_thresh =
           is_boosted_arf2_bwd_type ? 450 : 150;
+    }
+
+    if (is_480p_or_larger) {
+      sf->tpl_sf.reduce_num_frames = 1;
     }
 
     sf->lpf_sf.cdef_pick_method = CDEF_FAST_SEARCH_LVL4;
@@ -1200,6 +1212,7 @@ static void set_good_speed_features_framesize_independent(
 
     sf->tpl_sf.subpel_force_stop = HALF_PEL;
     sf->tpl_sf.search_method = FAST_BIGDIA;
+    sf->tpl_sf.use_sad_for_mode_decision = 1;
 
     sf->tx_sf.tx_type_search.fast_intra_tx_type_search = 1;
 
@@ -1228,8 +1241,7 @@ static void set_good_speed_features_framesize_independent(
     sf->part_sf.ext_partition_eval_thresh =
         allow_screen_content_tools ? BLOCK_8X8 : BLOCK_16X16;
     sf->part_sf.prune_sub_8x8_partition_level =
-        (allow_screen_content_tools || frame_is_intra_only(&cpi->common)) ? 0
-                                                                          : 2;
+        allow_screen_content_tools ? 1 : 2;
 
     sf->mv_sf.warp_search_method = WARP_SEARCH_DIAMOND;
 
@@ -1254,7 +1266,7 @@ static void set_good_speed_features_framesize_independent(
     sf->tpl_sf.use_y_only_rate_distortion = 1;
     sf->tpl_sf.subpel_force_stop = FULL_PEL;
     sf->tpl_sf.gop_length_decision_method = 2;
-    sf->tpl_sf.use_sad_for_mode_decision = 1;
+    sf->tpl_sf.use_sad_for_mode_decision = 2;
 
     sf->winner_mode_sf.dc_blk_pred_level = 2;
 
@@ -1279,10 +1291,7 @@ static void set_good_speed_features_framesize_independent(
 
     sf->part_sf.prune_rectangular_split_based_on_qidx =
         boosted || allow_screen_content_tools ? 0 : 2;
-    sf->part_sf.prune_sub_8x8_partition_level =
-        allow_screen_content_tools          ? 0
-        : frame_is_intra_only(&cpi->common) ? 1
-                                            : 2;
+
     sf->part_sf.prune_part4_search = 3;
 
     sf->mv_sf.simple_motion_subpel_force_stop = FULL_PEL;
@@ -1573,12 +1582,9 @@ static void set_rt_speed_feature_framesize_dependent(const AV1_COMP *const cpi,
     }
     sf->rt_sf.partition_direct_merging = 0;
     sf->hl_sf.accurate_bit_estimate = 0;
-
-    // "sf->rt_sf.estimate_motion_for_var_based_partition = 2" doesn't work well
-    // for screen contents.
-    if (sf->rt_sf.estimate_motion_for_var_based_partition == 2)
-      sf->rt_sf.estimate_motion_for_var_based_partition = 1;
-    if (speed >= 9) sf->rt_sf.estimate_motion_for_var_based_partition = 0;
+    // TODO(marpan): Look into why there is regression with
+    // estimate_motion_for_var_based_partition > 0 for screen.
+    sf->rt_sf.estimate_motion_for_var_based_partition = 0;
   }
   if (is_lossless_requested(&cpi->oxcf.rc_cfg)) {
     sf->rt_sf.use_rtc_tf = 0;
@@ -1896,6 +1902,7 @@ static AOM_INLINE void init_hl_sf(HIGH_LEVEL_SPEED_FEATURES *hl_sf) {
   hl_sf->adjust_num_frames_for_arf_filtering = 0;
   hl_sf->accurate_bit_estimate = 0;
   hl_sf->weight_calc_level_in_tf = 0;
+  hl_sf->allow_sub_blk_me_in_tf = 0;
 }
 
 static AOM_INLINE void init_fp_sf(FIRST_PASS_SPEED_FEATURES *fp_sf) {
@@ -1917,6 +1924,7 @@ static AOM_INLINE void init_tpl_sf(TPL_SPEED_FEATURES *tpl_sf) {
   tpl_sf->allow_compound_pred = 1;
   tpl_sf->use_y_only_rate_distortion = 0;
   tpl_sf->use_sad_for_mode_decision = 0;
+  tpl_sf->reduce_num_frames = 0;
 }
 
 static AOM_INLINE void init_gm_sf(GLOBAL_MOTION_SPEED_FEATURES *gm_sf) {
@@ -1958,6 +1966,7 @@ static AOM_INLINE void init_part_sf(PARTITION_SPEED_FEATURES *part_sf) {
   part_sf->intra_cnn_based_part_prune_level = 0;
   part_sf->ext_partition_eval_thresh = BLOCK_8X8;
   part_sf->rect_partition_eval_thresh = BLOCK_128X128;
+  part_sf->ext_part_eval_based_on_cur_best = 0;
   part_sf->prune_ext_part_using_split_info = 0;
   part_sf->prune_rectangular_split_based_on_qidx = 0;
   part_sf->prune_rect_part_using_4x4_var_deviation = false;
@@ -2466,6 +2475,7 @@ void av1_set_speed_features_qindex_dependent(AV1_COMP *cpi, int speed) {
   SPEED_FEATURES *const sf = &cpi->sf;
   WinnerModeParams *const winner_mode_params = &cpi->winner_mode_params;
   const int boosted = frame_is_boosted(cpi);
+  const int is_480p_or_lesser = AOMMIN(cm->width, cm->height) <= 480;
   const int is_480p_or_larger = AOMMIN(cm->width, cm->height) >= 480;
   const int is_720p_or_larger = AOMMIN(cm->width, cm->height) >= 720;
   const int is_1080p_or_larger = AOMMIN(cm->width, cm->height) >= 1080;
@@ -2615,6 +2625,15 @@ void av1_set_speed_features_qindex_dependent(AV1_COMP *cpi, int speed) {
       // for higher resolutions with low quantizers.
       if (cm->quant_params.base_qindex < qindex[is_480p_or_larger])
         sf->tx_sf.tx_type_search.winner_mode_tx_type_pruning = 3;
+    }
+  }
+
+  if (speed >= 5) {
+    // Disable the sf for low quantizers in case of low resolution screen
+    // contents.
+    if (cm->features.allow_screen_content_tools &&
+        cm->quant_params.base_qindex < 128 && is_480p_or_lesser) {
+      sf->part_sf.prune_sub_8x8_partition_level = 0;
     }
   }
 

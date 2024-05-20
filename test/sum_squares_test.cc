@@ -44,15 +44,15 @@ typedef libaom_test::FuncParam<SSI16Func> TestFuncs;
 
 class SumSquaresTest : public ::testing::TestWithParam<TestFuncs> {
  public:
-  virtual ~SumSquaresTest() {}
-  virtual void SetUp() {
+  ~SumSquaresTest() override = default;
+  void SetUp() override {
     params_ = this->GetParam();
     rnd_.Reset(ACMRandom::DeterministicSeed());
     src_ = reinterpret_cast<int16_t *>(aom_memalign(16, 256 * 256 * 2));
     ASSERT_NE(src_, nullptr);
   }
 
-  virtual void TearDown() { aom_free(src_); }
+  void TearDown() override { aom_free(src_); }
   void RunTest(int isRandom);
   void RunSpeedTest();
 
@@ -254,8 +254,8 @@ typedef std::tuple<TestSSEFuncs, int> SSETestParam;
 
 class SSETest : public ::testing::TestWithParam<SSETestParam> {
  public:
-  virtual ~SSETest() {}
-  virtual void SetUp() {
+  ~SSETest() override = default;
+  void SetUp() override {
     params_ = GET_PARAM(0);
     width_ = GET_PARAM(1);
     isHbd_ =
@@ -271,7 +271,7 @@ class SSETest : public ::testing::TestWithParam<SSETestParam> {
     ASSERT_NE(ref_, nullptr);
   }
 
-  virtual void TearDown() {
+  void TearDown() override {
     aom_free(src_);
     aom_free(ref_);
   }
@@ -412,6 +412,14 @@ INSTANTIATE_TEST_SUITE_P(NEON, SSETest,
                          Combine(ValuesIn(sse_neon), Range(4, 129, 4)));
 #endif  // HAVE_NEON
 
+#if HAVE_NEON_DOTPROD
+TestSSEFuncs sse_neon_dotprod[] = {
+  TestSSEFuncs(&aom_sse_c, &aom_sse_neon_dotprod),
+};
+INSTANTIATE_TEST_SUITE_P(NEON_DOTPROD, SSETest,
+                         Combine(ValuesIn(sse_neon_dotprod), Range(4, 129, 4)));
+#endif  // HAVE_NEON_DOTPROD
+
 #if HAVE_SSE4_1
 TestSSEFuncs sse_sse4[] = {
   TestSSEFuncs(&aom_sse_c, &aom_sse_sse4_1),
@@ -447,15 +455,15 @@ typedef std::tuple<TestSSE_SumFuncs, TX_SIZE> SSE_SumTestParam;
 
 class SSE_Sum_Test : public ::testing::TestWithParam<SSE_SumTestParam> {
  public:
-  virtual ~SSE_Sum_Test() {}
-  virtual void SetUp() {
+  ~SSE_Sum_Test() override = default;
+  void SetUp() override {
     params_ = GET_PARAM(0);
     rnd_.Reset(ACMRandom::DeterministicSeed());
     src_ = reinterpret_cast<int16_t *>(aom_memalign(32, 256 * 256 * 2));
     ASSERT_NE(src_, nullptr);
   }
 
-  virtual void TearDown() { aom_free(src_); }
+  void TearDown() override { aom_free(src_); }
   void RunTest(int isRandom, int tx_size, int run_times);
 
   void GenRandomData(int width, int height, int stride) {
@@ -598,8 +606,8 @@ const uint16_t test_block_size[2] = { 128, 256 };
 
 class Lowbd2dVarTest : public ::testing::TestWithParam<TestFuncVar2D> {
  public:
-  virtual ~Lowbd2dVarTest() {}
-  virtual void SetUp() {
+  ~Lowbd2dVarTest() override = default;
+  void SetUp() override {
     params_ = this->GetParam();
     rnd_.Reset(ACMRandom::DeterministicSeed());
     src_ = reinterpret_cast<uint8_t *>(
@@ -607,7 +615,7 @@ class Lowbd2dVarTest : public ::testing::TestWithParam<TestFuncVar2D> {
     ASSERT_NE(src_, nullptr);
   }
 
-  virtual void TearDown() { aom_free(src_); }
+  void TearDown() override { aom_free(src_); }
   void RunTest(int isRandom);
   void RunSpeedTest();
 
@@ -732,10 +740,18 @@ INSTANTIATE_TEST_SUITE_P(NEON, Lowbd2dVarTest,
 
 #endif  // HAVE_NEON
 
+#if HAVE_NEON_DOTPROD
+
+INSTANTIATE_TEST_SUITE_P(NEON_DOTPROD, Lowbd2dVarTest,
+                         ::testing::Values(TestFuncVar2D(
+                             &aom_var_2d_u8_c, &aom_var_2d_u8_neon_dotprod)));
+
+#endif  // HAVE_NEON_DOTPROD
+
 class Highbd2dVarTest : public ::testing::TestWithParam<TestFuncVar2D> {
  public:
-  virtual ~Highbd2dVarTest() {}
-  virtual void SetUp() {
+  ~Highbd2dVarTest() override = default;
+  void SetUp() override {
     params_ = this->GetParam();
     rnd_.Reset(ACMRandom::DeterministicSeed());
     src_ = reinterpret_cast<uint16_t *>(
@@ -743,7 +759,7 @@ class Highbd2dVarTest : public ::testing::TestWithParam<TestFuncVar2D> {
     ASSERT_NE(src_, nullptr);
   }
 
-  virtual void TearDown() { aom_free(src_); }
+  void TearDown() override { aom_free(src_); }
   void RunTest(int isRandom);
   void RunSpeedTest();
 

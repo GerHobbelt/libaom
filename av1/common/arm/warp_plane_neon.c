@@ -296,9 +296,111 @@ static INLINE int16x8_t horizontal_filter_8x1_f1_neon(const uint8x16_t in,
   return vreinterpretq_s16_u16(res);
 }
 
-static INLINE void vertical_filter_neon(const int16x8_t *src,
-                                        int32x4_t *res_low, int32x4_t *res_high,
-                                        int sy, int gamma) {
+static INLINE void vertical_filter_4x1_f1_neon(const int16x8_t *src,
+                                               int32x4_t *res, int sy) {
+  int16x4_t s0 = vget_low_s16(src[0]);
+  int16x4_t s1 = vget_low_s16(src[1]);
+  int16x4_t s2 = vget_low_s16(src[2]);
+  int16x4_t s3 = vget_low_s16(src[3]);
+  int16x4_t s4 = vget_low_s16(src[4]);
+  int16x4_t s5 = vget_low_s16(src[5]);
+  int16x4_t s6 = vget_low_s16(src[6]);
+  int16x4_t s7 = vget_low_s16(src[7]);
+
+  int16x8_t f =
+      vld1q_s16((int16_t *)(av1_warped_filter + (sy >> WARPEDDIFF_PREC_BITS)));
+
+  int32x4_t m0123 = vmull_lane_s16(s0, vget_low_s16(f), 0);
+  m0123 = vmlal_lane_s16(m0123, s1, vget_low_s16(f), 1);
+  m0123 = vmlal_lane_s16(m0123, s2, vget_low_s16(f), 2);
+  m0123 = vmlal_lane_s16(m0123, s3, vget_low_s16(f), 3);
+  m0123 = vmlal_lane_s16(m0123, s4, vget_high_s16(f), 0);
+  m0123 = vmlal_lane_s16(m0123, s5, vget_high_s16(f), 1);
+  m0123 = vmlal_lane_s16(m0123, s6, vget_high_s16(f), 2);
+  m0123 = vmlal_lane_s16(m0123, s7, vget_high_s16(f), 3);
+
+  *res = m0123;
+}
+
+static INLINE void vertical_filter_4x1_f4_neon(const int16x8_t *src,
+                                               int32x4_t *res, int sy,
+                                               int gamma) {
+  int16x8_t s0, s1, s2, s3;
+  transpose_s16_4x8(
+      vget_low_s16(src[0]), vget_low_s16(src[1]), vget_low_s16(src[2]),
+      vget_low_s16(src[3]), vget_low_s16(src[4]), vget_low_s16(src[5]),
+      vget_low_s16(src[6]), vget_low_s16(src[7]), &s0, &s1, &s2, &s3);
+
+  int16x8_t f[4];
+  load_filters_4(f, sy, gamma);
+
+#if AOM_HAVE_NEON_SVE_BRIDGE
+  int64x2_t m0 = aom_sdotq_s16(vdupq_n_s64(0), s0, f[0]);
+  int64x2_t m1 = aom_sdotq_s16(vdupq_n_s64(0), s1, f[1]);
+  int64x2_t m2 = aom_sdotq_s16(vdupq_n_s64(0), s2, f[2]);
+  int64x2_t m3 = aom_sdotq_s16(vdupq_n_s64(0), s3, f[3]);
+
+  int64x2_t m01 = vpaddq_s64(m0, m1);
+  int64x2_t m23 = vpaddq_s64(m2, m3);
+
+  *res = vcombine_s32(vmovn_s64(m01), vmovn_s64(m23));
+#else   // !AOM_HAVE_NEON_SVE_BRIDGE
+  int32x4_t m0 = vmull_s16(vget_low_s16(s0), vget_low_s16(f[0]));
+  m0 = vmlal_s16(m0, vget_high_s16(s0), vget_high_s16(f[0]));
+  int32x4_t m1 = vmull_s16(vget_low_s16(s1), vget_low_s16(f[1]));
+  m1 = vmlal_s16(m1, vget_high_s16(s1), vget_high_s16(f[1]));
+  int32x4_t m2 = vmull_s16(vget_low_s16(s2), vget_low_s16(f[2]));
+  m2 = vmlal_s16(m2, vget_high_s16(s2), vget_high_s16(f[2]));
+  int32x4_t m3 = vmull_s16(vget_low_s16(s3), vget_low_s16(f[3]));
+  m3 = vmlal_s16(m3, vget_high_s16(s3), vget_high_s16(f[3]));
+
+  int32x4_t m0123_pairs[] = { m0, m1, m2, m3 };
+
+  *res = horizontal_add_4d_s32x4(m0123_pairs);
+#endif  // AOM_HAVE_NEON_SVE_BRIDGE
+}
+
+static INLINE void vertical_filter_8x1_f1_neon(const int16x8_t *src,
+                                               int32x4_t *res_low,
+                                               int32x4_t *res_high, int sy) {
+  int16x8_t s0 = src[0];
+  int16x8_t s1 = src[1];
+  int16x8_t s2 = src[2];
+  int16x8_t s3 = src[3];
+  int16x8_t s4 = src[4];
+  int16x8_t s5 = src[5];
+  int16x8_t s6 = src[6];
+  int16x8_t s7 = src[7];
+
+  int16x8_t f =
+      vld1q_s16((int16_t *)(av1_warped_filter + (sy >> WARPEDDIFF_PREC_BITS)));
+
+  int32x4_t m0123 = vmull_lane_s16(vget_low_s16(s0), vget_low_s16(f), 0);
+  m0123 = vmlal_lane_s16(m0123, vget_low_s16(s1), vget_low_s16(f), 1);
+  m0123 = vmlal_lane_s16(m0123, vget_low_s16(s2), vget_low_s16(f), 2);
+  m0123 = vmlal_lane_s16(m0123, vget_low_s16(s3), vget_low_s16(f), 3);
+  m0123 = vmlal_lane_s16(m0123, vget_low_s16(s4), vget_high_s16(f), 0);
+  m0123 = vmlal_lane_s16(m0123, vget_low_s16(s5), vget_high_s16(f), 1);
+  m0123 = vmlal_lane_s16(m0123, vget_low_s16(s6), vget_high_s16(f), 2);
+  m0123 = vmlal_lane_s16(m0123, vget_low_s16(s7), vget_high_s16(f), 3);
+
+  int32x4_t m4567 = vmull_lane_s16(vget_high_s16(s0), vget_low_s16(f), 0);
+  m4567 = vmlal_lane_s16(m4567, vget_high_s16(s1), vget_low_s16(f), 1);
+  m4567 = vmlal_lane_s16(m4567, vget_high_s16(s2), vget_low_s16(f), 2);
+  m4567 = vmlal_lane_s16(m4567, vget_high_s16(s3), vget_low_s16(f), 3);
+  m4567 = vmlal_lane_s16(m4567, vget_high_s16(s4), vget_high_s16(f), 0);
+  m4567 = vmlal_lane_s16(m4567, vget_high_s16(s5), vget_high_s16(f), 1);
+  m4567 = vmlal_lane_s16(m4567, vget_high_s16(s6), vget_high_s16(f), 2);
+  m4567 = vmlal_lane_s16(m4567, vget_high_s16(s7), vget_high_s16(f), 3);
+
+  *res_low = m0123;
+  *res_high = m4567;
+}
+
+static INLINE void vertical_filter_8x1_f8_neon(const int16x8_t *src,
+                                               int32x4_t *res_low,
+                                               int32x4_t *res_high, int sy,
+                                               int gamma) {
   int16x8_t s0 = src[0];
   int16x8_t s1 = src[1];
   int16x8_t s2 = src[2];
@@ -328,9 +430,7 @@ static INLINE void vertical_filter_neon(const int16x8_t *src,
   int64x2_t m67 = vpaddq_s64(m6, m7);
 
   *res_low = vcombine_s32(vmovn_s64(m01), vmovn_s64(m23));
-  if (res_high) {
-    *res_high = vcombine_s32(vmovn_s64(m45), vmovn_s64(m67));
-  }
+  *res_high = vcombine_s32(vmovn_s64(m45), vmovn_s64(m67));
 #else   // !AOM_HAVE_NEON_SVE_BRIDGE
   int32x4_t m0 = vmull_s16(vget_low_s16(s0), vget_low_s16(f[0]));
   m0 = vmlal_s16(m0, vget_high_s16(s0), vget_high_s16(f[0]));
@@ -353,28 +453,21 @@ static INLINE void vertical_filter_neon(const int16x8_t *src,
   int32x4_t m4567_pairs[] = { m4, m5, m6, m7 };
 
   *res_low = horizontal_add_4d_s32x4(m0123_pairs);
-  if (res_high) {
-    *res_high = horizontal_add_4d_s32x4(m4567_pairs);
-  }
+  *res_high = horizontal_add_4d_s32x4(m4567_pairs);
 #endif  // AOM_HAVE_NEON_SVE_BRIDGE
 }
 
 static INLINE int clamp_iy(int iy, int height) {
-  if (iy < 0) {
-    return 0;
-  }
-  if (iy > height - 1) {
-    return height - 1;
-  }
-  return iy;
+  return clamp(iy, 0, height - 1);
 }
 
 static void warp_affine_horizontal_neon(
     const uint8_t *ref, int width, int height, int stride, int p_width,
     int p_height, int16_t alpha, int16_t beta, const int64_t x4,
     const int64_t y4, const int i, int16x8_t tmp[], const uint8x16_t indx_vec) {
-  const int reduce_bits_horiz = ROUND0_BITS;
   const int bd = 8;
+  const int reduce_bits_horiz = ROUND0_BITS;
+  const int height_limit = AOMMIN(8, p_height - i) + 7;
 
   int32_t ix4 = (int32_t)(x4 >> WARPEDMODEL_PREC_BITS);
   int32_t iy4 = (int32_t)(y4 >> WARPEDMODEL_PREC_BITS);
@@ -385,22 +478,21 @@ static void warp_affine_horizontal_neon(
   sx4 &= ~((1 << WARP_PARAM_REDUCE_BITS) - 1);
 
   if (ix4 <= -7) {
-    for (int k = -7; k < AOMMIN(8, p_height - i); ++k) {
-      int iy = clamp_iy(iy4 + k, height);
+    for (int k = 0; k < height_limit; ++k) {
+      int iy = clamp_iy(iy4 + k - 7, height);
       int16_t dup_val =
           (1 << (bd + FILTER_BITS - reduce_bits_horiz - 1)) +
           ref[iy * stride] * (1 << (FILTER_BITS - reduce_bits_horiz));
-
-      tmp[k + 7] = vdupq_n_s16(dup_val);
+      tmp[k] = vdupq_n_s16(dup_val);
     }
     return;
   } else if (ix4 >= width + 6) {
-    for (int k = -7; k < AOMMIN(8, p_height - i); ++k) {
-      int iy = clamp_iy(iy4 + k, height);
+    for (int k = 0; k < height_limit; ++k) {
+      int iy = clamp_iy(iy4 + k - 7, height);
       int16_t dup_val = (1 << (bd + FILTER_BITS - reduce_bits_horiz - 1)) +
                         ref[iy * stride + (width - 1)] *
                             (1 << (FILTER_BITS - reduce_bits_horiz));
-      tmp[k + 7] = vdupq_n_s16(dup_val);
+      tmp[k] = vdupq_n_s16(dup_val);
     }
     return;
   }
@@ -410,8 +502,8 @@ static void warp_affine_horizontal_neon(
     const int out_of_boundary_left = -(ix4 - 6);
     const int out_of_boundary_right = (ix4 + 8) - width;
 
-    for (int k = -7; k < AOMMIN(8, p_height - i); ++k) {
-      const int iy = clamp_iy(iy4 + k, height);
+    for (int k = 0; k < height_limit; ++k) {
+      const int iy = clamp_iy(iy4 + k - 7, height);
       const uint8_t *src = ref + iy * stride + ix4 - 7;
       uint8x16_t src_1 = vld1q_u8(src);
 
@@ -429,61 +521,61 @@ static void warp_affine_horizontal_neon(
         uint8x16_t mask_val = vcgeq_u8(indx_vec, cmp_vec);
         src_1 = vbslq_u8(mask_val, vec_dup, src_1);
       }
-      in[k + 7] = src_1;
+      in[k] = src_1;
     }
   } else {
-    for (int k = -7; k < AOMMIN(8, p_height - i); ++k) {
-      const int iy = clamp_iy(iy4 + k, height);
+    for (int k = 0; k < height_limit; ++k) {
+      const int iy = clamp_iy(iy4 + k - 7, height);
       const uint8_t *src = ref + iy * stride + ix4 - 7;
-      in[k + 7] = vld1q_u8(src);
+      in[k] = vld1q_u8(src);
     }
   }
 
   if (p_width == 4) {
     if (beta == 0) {
       if (alpha == 0) {
-        for (int k = -7; k < AOMMIN(8, p_height - i); ++k) {
-          tmp[k + 7] = horizontal_filter_4x1_f1_neon(in[k + 7], sx4);
+        for (int k = 0; k < height_limit; ++k) {
+          tmp[k] = horizontal_filter_4x1_f1_neon(in[k], sx4);
         }
       } else {
-        for (int k = -7; k < AOMMIN(8, p_height - i); ++k) {
-          tmp[k + 7] = horizontal_filter_4x1_f4_neon(in[k + 7], sx4, alpha);
+        for (int k = 0; k < height_limit; ++k) {
+          tmp[k] = horizontal_filter_4x1_f4_neon(in[k], sx4, alpha);
         }
       }
     } else {
       if (alpha == 0) {
-        for (int k = -7; k < AOMMIN(8, p_height - i); ++k) {
-          const int sx = sx4 + beta * (k + 4);
-          tmp[k + 7] = horizontal_filter_4x1_f1_neon(in[k + 7], sx);
+        for (int k = 0; k < height_limit; ++k) {
+          const int sx = sx4 + beta * (k - 3);
+          tmp[k] = horizontal_filter_4x1_f1_neon(in[k], sx);
         }
       } else {
-        for (int k = -7; k < AOMMIN(8, p_height - i); ++k) {
-          const int sx = sx4 + beta * (k + 4);
-          tmp[k + 7] = horizontal_filter_4x1_f4_neon(in[k + 7], sx, alpha);
+        for (int k = 0; k < height_limit; ++k) {
+          const int sx = sx4 + beta * (k - 3);
+          tmp[k] = horizontal_filter_4x1_f4_neon(in[k], sx, alpha);
         }
       }
     }
   } else {
     if (beta == 0) {
       if (alpha == 0) {
-        for (int k = -7; k < AOMMIN(8, p_height - i); ++k) {
-          tmp[k + 7] = horizontal_filter_8x1_f1_neon(in[k + 7], sx4);
+        for (int k = 0; k < height_limit; ++k) {
+          tmp[k] = horizontal_filter_8x1_f1_neon(in[k], sx4);
         }
       } else {
-        for (int k = -7; k < AOMMIN(8, p_height - i); ++k) {
-          tmp[k + 7] = horizontal_filter_8x1_f8_neon(in[k + 7], sx4, alpha);
+        for (int k = 0; k < height_limit; ++k) {
+          tmp[k] = horizontal_filter_8x1_f8_neon(in[k], sx4, alpha);
         }
       }
     } else {
       if (alpha == 0) {
-        for (int k = -7; k < AOMMIN(8, p_height - i); ++k) {
-          const int sx = sx4 + beta * (k + 4);
-          tmp[k + 7] = horizontal_filter_8x1_f1_neon(in[k + 7], sx);
+        for (int k = 0; k < height_limit; ++k) {
+          const int sx = sx4 + beta * (k - 3);
+          tmp[k] = horizontal_filter_8x1_f1_neon(in[k], sx);
         }
       } else {
-        for (int k = -7; k < AOMMIN(8, p_height - i); ++k) {
-          const int sx = sx4 + beta * (k + 4);
-          tmp[k + 7] = horizontal_filter_8x1_f8_neon(in[k + 7], sx, alpha);
+        for (int k = 0; k < height_limit; ++k) {
+          const int sx = sx4 + beta * (k - 3);
+          tmp[k] = horizontal_filter_8x1_f8_neon(in[k], sx, alpha);
         }
       }
     }
@@ -522,11 +614,14 @@ static void warp_affine_vertical_neon(
   if (p_width > 4) {
     for (int k = -4; k < AOMMIN(4, p_height - i - 4); ++k) {
       int sy = sy4 + delta * (k + 4);
-
       const int16x8_t *v_src = tmp + (k + 4);
 
       int32x4_t res_lo, res_hi;
-      vertical_filter_neon(v_src, &res_lo, &res_hi, sy, gamma);
+      if (gamma == 0) {
+        vertical_filter_8x1_f1_neon(v_src, &res_lo, &res_hi, sy);
+      } else {
+        vertical_filter_8x1_f8_neon(v_src, &res_lo, &res_hi, sy, gamma);
+      }
 
       res_lo = vaddq_s32(res_lo, vdupq_n_s32(add_const_vert));
       res_hi = vaddq_s32(res_hi, vdupq_n_s32(add_const_vert));
@@ -569,11 +664,14 @@ static void warp_affine_vertical_neon(
     // p_width == 4
     for (int k = -4; k < AOMMIN(4, p_height - i - 4); ++k) {
       int sy = sy4 + delta * (k + 4);
-
       const int16x8_t *v_src = tmp + (k + 4);
 
       int32x4_t res_lo;
-      vertical_filter_neon(v_src, &res_lo, NULL, sy, gamma);
+      if (gamma == 0) {
+        vertical_filter_4x1_f1_neon(v_src, &res_lo, sy);
+      } else {
+        vertical_filter_4x1_f4_neon(v_src, &res_lo, sy, gamma);
+      }
 
       res_lo = vaddq_s32(res_lo, vdupq_n_s32(add_const_vert));
 

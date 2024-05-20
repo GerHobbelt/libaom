@@ -469,6 +469,14 @@ typedef struct HIGH_LEVEL_SPEED_FEATURES {
    * 1: Calculate weight using a lookup table that approximates exp().
    */
   int weight_calc_level_in_tf;
+
+  /*!
+   * Decide whether to perform motion estimation at split block (i.e. 16x16)
+   * level or not.
+   * 0: Always allow motion estimation.
+   * 1: Conditionally allow motion estimation based on 4x4 sub-blocks variance.
+   */
+  int allow_sub_blk_me_in_tf;
 } HIGH_LEVEL_SPEED_FEATURES;
 
 /*!
@@ -542,7 +550,17 @@ typedef struct TPL_SPEED_FEATURES {
   int use_y_only_rate_distortion;
 
   // Use SAD instead of SATD during intra/inter mode search.
+  // If set to 0, use SATD always.
+  // If set to 1, use SAD during intra/inter mode search for frames in the
+  // higher temporal layers of the hierarchical prediction structure.
+  // If set to 2, use SAD during intra/inter mode search for all frames.
+  // This sf is disabled for the first GF group of the key-frame interval,
+  // i.e., SATD is used during intra/inter mode search of the first GF group.
   int use_sad_for_mode_decision;
+
+  // Skip tpl processing for frames of type LF_UPDATE.
+  // This sf is disabled for the first GF group of the key-frame interval.
+  int reduce_num_frames;
 } TPL_SPEED_FEATURES;
 
 typedef struct GLOBAL_MOTION_SPEED_FEATURES {
@@ -663,6 +681,9 @@ typedef struct PARTITION_SPEED_FEATURES {
 
   // Disable extended partition search for lower block sizes.
   int ext_partition_eval_thresh;
+
+  // Use best partition decision so far to tune 'ext_partition_eval_thresh'
+  int ext_part_eval_based_on_cur_best;
 
   // Disable rectangular partitions for larger block sizes.
   int rect_partition_eval_thresh;

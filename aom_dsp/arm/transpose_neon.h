@@ -397,12 +397,11 @@ static INLINE void transpose_u16_4x8(uint16x4_t *a0, uint16x4_t *a1,
   *o3 = vreinterpretq_u16_u32(d1.val[1]);
 }
 
-static INLINE void transpose_s16_4x8(int16x4_t *a0, int16x4_t *a1,
-                                     int16x4_t *a2, int16x4_t *a3,
-                                     int16x4_t *a4, int16x4_t *a5,
-                                     int16x4_t *a6, int16x4_t *a7,
-                                     int16x8_t *o0, int16x8_t *o1,
-                                     int16x8_t *o2, int16x8_t *o3) {
+static INLINE void transpose_s16_4x8(int16x4_t a0, int16x4_t a1, int16x4_t a2,
+                                     int16x4_t a3, int16x4_t a4, int16x4_t a5,
+                                     int16x4_t a6, int16x4_t a7, int16x8_t *o0,
+                                     int16x8_t *o1, int16x8_t *o2,
+                                     int16x8_t *o3) {
   // Combine rows. Goes from:
   // a0: 00 01 02 03
   // a1: 10 11 12 13
@@ -418,10 +417,10 @@ static INLINE void transpose_s16_4x8(int16x4_t *a0, int16x4_t *a1,
   // b2: 20 21 22 23 60 61 62 63
   // b3: 30 31 32 33 70 71 72 73
 
-  const int16x8_t b0 = vcombine_s16(*a0, *a4);
-  const int16x8_t b1 = vcombine_s16(*a1, *a5);
-  const int16x8_t b2 = vcombine_s16(*a2, *a6);
-  const int16x8_t b3 = vcombine_s16(*a3, *a7);
+  const int16x8_t b0 = vcombine_s16(a0, a4);
+  const int16x8_t b1 = vcombine_s16(a1, a5);
+  const int16x8_t b2 = vcombine_s16(a2, a6);
+  const int16x8_t b3 = vcombine_s16(a3, a7);
 
   // Swap 16 bit elements resulting in:
   // c0.val[0]: 00 10 02 12 40 50 42 52
@@ -803,6 +802,30 @@ static INLINE int64x2_t aom_vtrn2q_s64(int64x2_t a, int64x2_t b) {
 #else
   return vcombine_s64(vget_high_s64(a), vget_high_s64(b));
 #endif
+}
+
+static INLINE void transpose_s32_4x8(int32x4_t a0, int32x4_t a1, int32x4_t a2,
+                                     int32x4_t a3, int32x4_t a4, int32x4_t a5,
+                                     int32x4_t a6, int32x4_t a7,
+                                     int32x4x2_t *o0, int32x4x2_t *o1,
+                                     int32x4x2_t *o2, int32x4x2_t *o3) {
+  // Perform a 4 x 8 matrix transpose by building on top of the existing 4 x 4
+  // matrix transpose implementation:
+  // [ A ]^T => [ A^T B^T ]
+  // [ B ]
+
+  transpose_s32_4x4(&a0, &a1, &a2, &a3);  // A^T
+  transpose_s32_4x4(&a4, &a5, &a6, &a7);  // B^T
+
+  o0->val[0] = a0;
+  o1->val[0] = a1;
+  o2->val[0] = a2;
+  o3->val[0] = a3;
+
+  o0->val[1] = a4;
+  o1->val[1] = a5;
+  o2->val[1] = a6;
+  o3->val[1] = a7;
 }
 
 static INLINE void transpose_s32_8x8(int32x4x2_t *a0, int32x4x2_t *a1,

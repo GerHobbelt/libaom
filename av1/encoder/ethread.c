@@ -579,6 +579,9 @@ static int enc_row_mt_worker_hook(void *arg1, void *unused) {
     pthread_mutex_lock(enc_row_mt_mutex_);
 #endif
     row_mt_exit = enc_row_mt->row_mt_exit;
+    // row_mt_exit check here can be avoided as it is checked after
+    // sync_read_ptr() in encode_sb_row(). However, checking row_mt_exit here,
+    // tries to return before calling the function get_next_job().
     if (!row_mt_exit &&
         !get_next_job(&cpi->tile_data[cur_tile_id], &current_mi_row,
                       cm->seq_params->mib_size)) {
@@ -802,6 +805,15 @@ void av1_init_mt_sync(AV1_COMP *cpi, int is_first_pass) {
       av1_loop_filter_alloc(lf_sync, cm, sb_rows, cm->width, num_lf_workers);
     }
 
+    // Initialize tpl MT object.
+    AV1TplRowMultiThreadInfo *tpl_row_mt = &mt_info->tpl_row_mt;
+    if (tpl_row_mt->mutex_ == NULL) {
+      CHECK_MEM_ERROR(cm, tpl_row_mt->mutex_,
+                      aom_malloc(sizeof(*(tpl_row_mt->mutex_))));
+      if (tpl_row_mt->mutex_) pthread_mutex_init(tpl_row_mt->mutex_, NULL);
+    }
+    tpl_row_mt->tpl_mt_exit = false;
+
 #if !CONFIG_REALTIME_ONLY
     if (is_restoration_used(cm)) {
       // Initialize loop restoration MT object.
@@ -811,7 +823,7 @@ void av1_init_mt_sync(AV1_COMP *cpi, int is_first_pass) {
         rst_unit_size = RESTORATION_UNITSIZE_MAX;
       else
         rst_unit_size = (RESTORATION_UNITSIZE_MAX >> 1);
-      int num_rows_lr = av1_lr_count_units_in_tile(rst_unit_size, cm->height);
+      int num_rows_lr = av1_lr_count_units(rst_unit_size, cm->height);
       int num_lr_workers = av1_get_num_mod_workers_for_alloc(p_mt_info, MOD_LR);
       if (!lr_sync->sync_range || num_rows_lr > lr_sync->rows ||
           num_lr_workers > lr_sync->num_workers ||
@@ -1986,6 +1998,27 @@ void av1_tpl_row_mt_sync_write(AV1TplRowMultiThreadSync *tpl_row_mt_sync, int r,
 #endif  // CONFIG_MULTITHREAD
 }
 
+static AOM_INLINE void set_mode_estimation_done(AV1_COMP *cpi) {
+  const CommonModeInfoParams *const mi_params = &cpi->common.mi_params;
+  TplParams *const tpl_data = &cpi->ppi->tpl_data;
+  const BLOCK_SIZE bsize =
+      convert_length_to_bsize(cpi->ppi->tpl_data.tpl_bsize_1d);
+  const int mi_height = mi_size_high[bsize];
+  AV1TplRowMultiThreadInfo *const tpl_row_mt = &cpi->mt_info.tpl_row_mt;
+  const int tplb_cols_in_tile =
+      ROUND_POWER_OF_TWO(mi_params->mi_cols, mi_size_wide_log2[bsize]);
+  // In case of tpl row-multithreading, due to top-right dependency, the worker
+  // on an mb_row waits for the completion of the tpl processing of the top and
+  // top-right blocks. Hence, in case a thread (main/worker) encounters an
+  // error, update that the tpl processing of every mb_row in the frame is
+  // complete in order to avoid dependent workers waiting indefinitely.
+  for (int mi_row = 0, tplb_row = 0; mi_row < mi_params->mi_rows;
+       mi_row += mi_height, tplb_row++) {
+    (*tpl_row_mt->sync_write_ptr)(&tpl_data->tpl_mt_sync, tplb_row,
+                                  tplb_cols_in_tile - 1, tplb_cols_in_tile);
+  }
+}
+
 // Each worker calls tpl_worker_hook() and computes the tpl data.
 static int tpl_worker_hook(void *arg1, void *unused) {
   (void)unused;
@@ -1997,10 +2030,34 @@ static int tpl_worker_hook(void *arg1, void *unused) {
   TplTxfmStats *tpl_txfm_stats = &thread_data->td->tpl_txfm_stats;
   TplBuffers *tpl_tmp_buffers = &thread_data->td->tpl_tmp_buffers;
   CommonModeInfoParams *mi_params = &cm->mi_params;
+  int num_active_workers = cpi->ppi->tpl_data.tpl_mt_sync.num_threads_working;
+
+  struct aom_internal_error_info *const error_info = &thread_data->error_info;
+  xd->error_info = error_info;
+  AV1TplRowMultiThreadInfo *const tpl_row_mt = &cpi->mt_info.tpl_row_mt;
+  (void)tpl_row_mt;
+#if CONFIG_MULTITHREAD
+  pthread_mutex_t *tpl_error_mutex_ = tpl_row_mt->mutex_;
+#endif
+
+  // The jmp_buf is valid only for the duration of the function that calls
+  // setjmp(). Therefore, this function must reset the 'setjmp' field to 0
+  // before it returns.
+  if (setjmp(error_info->jmp)) {
+    error_info->setjmp = 0;
+#if CONFIG_MULTITHREAD
+    pthread_mutex_lock(tpl_error_mutex_);
+    tpl_row_mt->tpl_mt_exit = true;
+    pthread_mutex_unlock(tpl_error_mutex_);
+#endif
+    set_mode_estimation_done(cpi);
+    return 0;
+  }
+  error_info->setjmp = 1;
+
   BLOCK_SIZE bsize = convert_length_to_bsize(cpi->ppi->tpl_data.tpl_bsize_1d);
   TX_SIZE tx_size = max_txsize_lookup[bsize];
   int mi_height = mi_size_high[bsize];
-  int num_active_workers = cpi->ppi->tpl_data.tpl_mt_sync.num_threads_working;
 
   av1_init_tpl_txfm_stats(tpl_txfm_stats);
 
@@ -2015,6 +2072,7 @@ static int tpl_worker_hook(void *arg1, void *unused) {
     av1_mc_flow_dispenser_row(cpi, tpl_txfm_stats, tpl_tmp_buffers, x, mi_row,
                               bsize, tx_size);
   }
+  error_info->setjmp = 0;
   return 1;
 }
 
@@ -2183,7 +2241,7 @@ static AOM_INLINE int tf_get_next_job(AV1TemporalFilterSync *tf_mt_sync,
   pthread_mutex_t *tf_mutex_ = tf_mt_sync->mutex_;
   pthread_mutex_lock(tf_mutex_);
 #endif
-  if (tf_mt_sync->next_tf_row < mb_rows) {
+  if (!tf_mt_sync->tf_mt_exit && tf_mt_sync->next_tf_row < mb_rows) {
     *current_mb_row = tf_mt_sync->next_tf_row;
     tf_mt_sync->next_tf_row++;
     do_next_row = 1;
@@ -2203,6 +2261,28 @@ static int tf_worker_hook(void *arg1, void *unused) {
   TemporalFilterCtx *tf_ctx = &cpi->tf_ctx;
   AV1TemporalFilterSync *tf_sync = &cpi->mt_info.tf_sync;
   const struct scale_factors *scale = &cpi->tf_ctx.sf;
+
+#if CONFIG_MULTITHREAD
+  pthread_mutex_t *tf_mutex_ = tf_sync->mutex_;
+#endif
+  MACROBLOCKD *const xd = &thread_data->td->mb.e_mbd;
+  struct aom_internal_error_info *const error_info = &thread_data->error_info;
+  xd->error_info = error_info;
+
+  // The jmp_buf is valid only for the duration of the function that calls
+  // setjmp(). Therefore, this function must reset the 'setjmp' field to 0
+  // before it returns.
+  if (setjmp(error_info->jmp)) {
+    error_info->setjmp = 0;
+#if CONFIG_MULTITHREAD
+    pthread_mutex_lock(tf_mutex_);
+    tf_sync->tf_mt_exit = true;
+    pthread_mutex_unlock(tf_mutex_);
+#endif
+    return 0;
+  }
+  error_info->setjmp = 1;
+
   const int num_planes = av1_num_planes(&cpi->common);
   assert(num_planes >= 1 && num_planes <= MAX_MB_PLANE);
 
@@ -2219,6 +2299,7 @@ static int tf_worker_hook(void *arg1, void *unused) {
 
   tf_restore_state(mbd, input_mb_mode_info, input_buffer, num_planes);
 
+  error_info->setjmp = 0;
   return 1;
 }
 
@@ -2227,6 +2308,7 @@ static void prepare_tf_workers(AV1_COMP *cpi, AVxWorkerHook hook,
                                int num_workers, int is_highbitdepth) {
   MultiThreadInfo *mt_info = &cpi->mt_info;
   mt_info->tf_sync.next_tf_row = 0;
+  mt_info->tf_sync.tf_mt_exit = false;
   for (int i = num_workers - 1; i >= 0; i--) {
     AVxWorker *worker = &mt_info->workers[i];
     EncWorkerData *thread_data = &mt_info->tile_thr_data[i];
@@ -2331,19 +2413,6 @@ static AOM_INLINE void switch_direction(AV1_COMP *cpi, int *frame_idx,
   get_next_gm_job(cpi, frame_idx, *(cur_dir));
 }
 
-// Initializes inliers, num_inliers and segment_map.
-static AOM_INLINE void init_gm_thread_data(
-    const GlobalMotionInfo *gm_info, GlobalMotionThreadData *thread_data) {
-  for (int m = 0; m < RANSAC_NUM_MOTIONS; m++) {
-    MotionModel motion_params = thread_data->motion_models[m];
-    av1_zero(motion_params.params);
-    motion_params.num_inliers = 0;
-  }
-
-  av1_zero_array(thread_data->segment_map,
-                 gm_info->segment_map_w * gm_info->segment_map_h);
-}
-
 // Hook function for each thread in global motion multi-threading.
 static int gm_mt_worker_hook(void *arg1, void *unused) {
   (void)unused;
@@ -2351,16 +2420,34 @@ static int gm_mt_worker_hook(void *arg1, void *unused) {
   EncWorkerData *thread_data = (EncWorkerData *)arg1;
   AV1_COMP *cpi = thread_data->cpi;
   GlobalMotionInfo *gm_info = &cpi->gm_info;
-  MultiThreadInfo *mt_info = &cpi->mt_info;
-  JobInfo *job_info = &mt_info->gm_sync.job_info;
+  AV1GlobalMotionSync *gm_sync = &cpi->mt_info.gm_sync;
+  JobInfo *job_info = &gm_sync->job_info;
   int thread_id = thread_data->thread_id;
-  GlobalMotionThreadData *gm_thread_data =
-      &mt_info->gm_sync.thread_data[thread_id];
-  int cur_dir = job_info->thread_id_to_dir[thread_id];
+  GlobalMotionData *gm_thread_data = &thread_data->td->gm_data;
 #if CONFIG_MULTITHREAD
-  pthread_mutex_t *gm_mt_mutex_ = mt_info->gm_sync.mutex_;
+  pthread_mutex_t *gm_mt_mutex_ = gm_sync->mutex_;
 #endif
 
+  MACROBLOCKD *const xd = &thread_data->td->mb.e_mbd;
+  struct aom_internal_error_info *const error_info = &thread_data->error_info;
+  xd->error_info = error_info;
+
+  // The jmp_buf is valid only for the duration of the function that calls
+  // setjmp(). Therefore, this function must reset the 'setjmp' field to 0
+  // before it returns.
+  if (setjmp(error_info->jmp)) {
+    error_info->setjmp = 0;
+#if CONFIG_MULTITHREAD
+    pthread_mutex_lock(gm_mt_mutex_);
+    gm_sync->gm_mt_exit = true;
+    pthread_mutex_unlock(gm_mt_mutex_);
+#endif
+    return 0;
+  }
+  error_info->setjmp = 1;
+
+  int cur_dir = job_info->thread_id_to_dir[thread_id];
+  bool gm_mt_exit = false;
   while (1) {
     int ref_buf_idx = -1;
 
@@ -2368,9 +2455,10 @@ static int gm_mt_worker_hook(void *arg1, void *unused) {
     pthread_mutex_lock(gm_mt_mutex_);
 #endif
 
+    gm_mt_exit = gm_sync->gm_mt_exit;
     // Populates ref_buf_idx(the reference frame type) for which global motion
     // estimation will be done.
-    if (!get_next_gm_job(cpi, &ref_buf_idx, cur_dir)) {
+    if (!gm_mt_exit && !get_next_gm_job(cpi, &ref_buf_idx, cur_dir)) {
       // No jobs are available for the current direction. Switch
       // to other direction and get the next job, if available.
       switch_direction(cpi, &ref_buf_idx, &cur_dir);
@@ -2380,9 +2468,11 @@ static int gm_mt_worker_hook(void *arg1, void *unused) {
     pthread_mutex_unlock(gm_mt_mutex_);
 #endif
 
-    if (ref_buf_idx == -1) break;
+    // When gm_mt_exit is set to true, other workers need not pursue any
+    // further jobs.
+    if (gm_mt_exit) return 1;
 
-    init_gm_thread_data(gm_info, gm_thread_data);
+    if (ref_buf_idx == -1) break;
 
     // Compute global motion for the given ref_buf_idx.
     av1_compute_gm_for_valid_ref_frames(
@@ -2404,6 +2494,7 @@ static int gm_mt_worker_hook(void *arg1, void *unused) {
     pthread_mutex_unlock(gm_mt_mutex_);
 #endif
   }
+  error_info->setjmp = 0;
   return 1;
 }
 
@@ -2411,6 +2502,7 @@ static int gm_mt_worker_hook(void *arg1, void *unused) {
 static AOM_INLINE void prepare_gm_workers(AV1_COMP *cpi, AVxWorkerHook hook,
                                           int num_workers) {
   MultiThreadInfo *mt_info = &cpi->mt_info;
+  mt_info->gm_sync.gm_mt_exit = false;
   for (int i = num_workers - 1; i >= 0; i--) {
     AVxWorker *worker = &mt_info->workers[i];
     EncWorkerData *thread_data = &mt_info->tile_thr_data[i];
@@ -2429,6 +2521,9 @@ static AOM_INLINE void prepare_gm_workers(AV1_COMP *cpi, AVxWorkerHook hook,
     } else {
       thread_data->td = thread_data->original_td;
     }
+
+    if (thread_data->td != &cpi->td)
+      gm_alloc_data(cpi, &thread_data->td->gm_data);
   }
 }
 
@@ -2455,69 +2550,28 @@ static AOM_INLINE int compute_gm_workers(const AV1_COMP *cpi) {
 }
 
 // Frees the memory allocated for each worker in global motion multi-threading.
-void av1_gm_dealloc(AV1GlobalMotionSync *gm_sync_data) {
-  if (gm_sync_data->thread_data != NULL) {
-    for (int j = 0; j < gm_sync_data->allocated_workers; j++) {
-      GlobalMotionThreadData *thread_data = &gm_sync_data->thread_data[j];
-      aom_free(thread_data->segment_map);
-
-      for (int m = 0; m < RANSAC_NUM_MOTIONS; m++)
-        aom_free(thread_data->motion_models[m].inliers);
-    }
-    aom_free(gm_sync_data->thread_data);
-  }
-}
-
-// Allocates memory for inliers and segment_map for each worker in global motion
-// multi-threading.
-static AOM_INLINE void gm_alloc(AV1_COMP *cpi, int num_workers) {
-  AV1_COMMON *cm = &cpi->common;
-  AV1GlobalMotionSync *gm_sync = &cpi->mt_info.gm_sync;
-  GlobalMotionInfo *gm_info = &cpi->gm_info;
-
-  gm_sync->allocated_workers = num_workers;
-  gm_sync->allocated_width = cpi->source->y_width;
-  gm_sync->allocated_height = cpi->source->y_height;
-
-  CHECK_MEM_ERROR(cm, gm_sync->thread_data,
-                  aom_malloc(sizeof(*gm_sync->thread_data) * num_workers));
-
-  for (int i = 0; i < num_workers; i++) {
-    GlobalMotionThreadData *thread_data = &gm_sync->thread_data[i];
-    CHECK_MEM_ERROR(
-        cm, thread_data->segment_map,
-        aom_malloc(sizeof(*thread_data->segment_map) * gm_info->segment_map_w *
-                   gm_info->segment_map_h));
-
-    for (int m = 0; m < RANSAC_NUM_MOTIONS; m++) {
-      CHECK_MEM_ERROR(
-          cm, thread_data->motion_models[m].inliers,
-          aom_malloc(sizeof(*thread_data->motion_models[m].inliers) * 2 *
-                     MAX_CORNERS));
-    }
+static AOM_INLINE void gm_dealloc_thread_data(AV1_COMP *cpi, int num_workers) {
+  MultiThreadInfo *mt_info = &cpi->mt_info;
+  for (int j = 0; j < num_workers; j++) {
+    EncWorkerData *thread_data = &mt_info->tile_thr_data[j];
+    ThreadData *td = thread_data->td;
+    if (td != &cpi->td) gm_dealloc_data(&td->gm_data);
   }
 }
 
 // Implements multi-threading for global motion.
 void av1_global_motion_estimation_mt(AV1_COMP *cpi) {
-  AV1GlobalMotionSync *gm_sync = &cpi->mt_info.gm_sync;
-  JobInfo *job_info = &gm_sync->job_info;
+  JobInfo *job_info = &cpi->mt_info.gm_sync.job_info;
 
   av1_zero(*job_info);
 
   int num_workers = compute_gm_workers(cpi);
 
-  if (num_workers > gm_sync->allocated_workers ||
-      cpi->source->y_width != gm_sync->allocated_width ||
-      cpi->source->y_height != gm_sync->allocated_height) {
-    av1_gm_dealloc(gm_sync);
-    gm_alloc(cpi, num_workers);
-  }
-
   assign_thread_to_dir(job_info->thread_id_to_dir, num_workers);
   prepare_gm_workers(cpi, gm_mt_worker_hook, num_workers);
   launch_workers(&cpi->mt_info, num_workers);
   sync_enc_workers(&cpi->mt_info, &cpi->common, num_workers);
+  gm_dealloc_thread_data(cpi, num_workers);
 }
 #endif  // !CONFIG_REALTIME_ONLY
 
