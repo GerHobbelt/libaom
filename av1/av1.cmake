@@ -394,10 +394,16 @@ list(APPEND AOM_AV1_COMMON_INTRIN_NEON
             "${AOM_ROOT}/av1/common/arm/wiener_convolve_neon.c")
 
 list(APPEND AOM_AV1_COMMON_INTRIN_NEON_DOTPROD
-            "${AOM_ROOT}/av1/common/arm/compound_convolve_neon_dotprod.c")
+            "${AOM_ROOT}/av1/common/arm/compound_convolve_neon_dotprod.c"
+            "${AOM_ROOT}/av1/common/arm/convolve_neon_dotprod.c")
 
 list(APPEND AOM_AV1_COMMON_INTRIN_NEON_I8MM
-            "${AOM_ROOT}/av1/common/arm/compound_convolve_neon_i8mm.c")
+            "${AOM_ROOT}/av1/common/arm/compound_convolve_neon_i8mm.c"
+            "${AOM_ROOT}/av1/common/arm/convolve_neon_i8mm.c"
+            "${AOM_ROOT}/av1/common/arm/warp_plane_neon_i8mm.c")
+
+list(APPEND AOM_AV1_COMMON_INTRIN_SVE
+            "${AOM_ROOT}/av1/common/arm/warp_plane_sve.c")
 
 list(APPEND AOM_AV1_ENCODER_INTRIN_SSE4_2
             "${AOM_ROOT}/av1/encoder/x86/hash_sse42.c")
@@ -458,8 +464,12 @@ if(CONFIG_AV1_HIGHBITDEPTH)
               "${AOM_ROOT}/av1/common/x86/highbd_warp_affine_avx2.c")
 
   list(APPEND AOM_AV1_COMMON_INTRIN_NEON
+              "${AOM_ROOT}/av1/common/arm/highbd_compound_convolve_neon.c"
+              "${AOM_ROOT}/av1/common/arm/highbd_convolve_horiz_rs_neon.c"
               "${AOM_ROOT}/av1/common/arm/highbd_convolve_neon.c"
-              "${AOM_ROOT}/av1/common/arm/highbd_warp_plane_neon.c")
+              "${AOM_ROOT}/av1/common/arm/highbd_convolve_scale_neon.c"
+              "${AOM_ROOT}/av1/common/arm/highbd_warp_plane_neon.c"
+              "${AOM_ROOT}/av1/common/arm/highbd_wiener_convolve_neon.c")
 
   list(APPEND AOM_AV1_ENCODER_INTRIN_SSE2
               "${AOM_ROOT}/av1/encoder/x86/highbd_block_error_intrin_sse2.c"
@@ -675,6 +685,11 @@ function(setup_av1_targets)
     add_intrinsics_object_library("${AOM_NEON_I8MM_FLAG}" "neon_i8mm"
                                   "aom_av1_common"
                                   "AOM_AV1_COMMON_INTRIN_NEON_I8MM")
+  endif()
+
+  if(HAVE_SVE)
+    add_intrinsics_object_library("${AOM_SVE_FLAG}" "sve" "aom_av1_common"
+                                  "AOM_AV1_COMMON_INTRIN_SVE")
   endif()
 
   if(HAVE_VSX)

@@ -851,6 +851,10 @@ static void set_good_speed_feature_framesize_dependent(
     if (is_720p_or_larger)
       sf->part_sf.ext_part_eval_based_on_cur_best =
           (allow_screen_content_tools || frame_is_intra_only(cm)) ? 0 : 1;
+
+    if (is_480p_or_larger) {
+      sf->tpl_sf.reduce_num_frames = 1;
+    }
   }
 
   if (speed >= 6) {
@@ -901,10 +905,6 @@ static void set_good_speed_feature_framesize_dependent(
     if (!is_720p_or_larger) {
       sf->tx_sf.tx_type_search.fast_inter_tx_type_prob_thresh =
           is_boosted_arf2_bwd_type ? 450 : 150;
-    }
-
-    if (is_480p_or_larger) {
-      sf->tpl_sf.reduce_num_frames = 1;
     }
 
     sf->lpf_sf.cdef_pick_method = CDEF_FAST_SEARCH_LVL4;
@@ -1188,6 +1188,7 @@ static void set_good_speed_features_framesize_independent(
     sf->inter_sf.alt_ref_search_fp = 2;
     sf->inter_sf.txfm_rd_gate_level[TX_SEARCH_DEFAULT] = boosted ? 0 : 3;
     sf->inter_sf.txfm_rd_gate_level[TX_SEARCH_MOTION_MODE] = boosted ? 0 : 5;
+    sf->inter_sf.txfm_rd_gate_level[TX_SEARCH_COMP_TYPE_MODE] = boosted ? 0 : 3;
 
     sf->inter_sf.prune_inter_modes_based_on_tpl = boosted ? 0 : 2;
     sf->inter_sf.prune_ext_comp_using_neighbors = 2;
@@ -1246,7 +1247,9 @@ static void set_good_speed_features_framesize_independent(
     sf->mv_sf.warp_search_method = WARP_SEARCH_DIAMOND;
 
     sf->inter_sf.prune_inter_modes_if_skippable = 1;
+    sf->inter_sf.prune_single_ref = is_boosted_arf2_bwd_type ? 0 : 1;
     sf->inter_sf.txfm_rd_gate_level[TX_SEARCH_DEFAULT] = boosted ? 0 : 4;
+    sf->inter_sf.txfm_rd_gate_level[TX_SEARCH_COMP_TYPE_MODE] = boosted ? 0 : 5;
     sf->inter_sf.enable_fast_compound_mode_search = 2;
 
     sf->interp_sf.skip_interp_filter_search = boosted ? 0 : 1;
@@ -1279,6 +1282,7 @@ static void set_good_speed_features_framesize_independent(
 
     sf->inter_sf.prune_inter_modes_based_on_tpl = boosted ? 0 : 3;
     sf->inter_sf.selective_ref_frame = 6;
+    sf->inter_sf.prune_single_ref = is_boosted_arf2_bwd_type ? 0 : 2;
     sf->inter_sf.prune_ext_comp_using_neighbors = 3;
 
     sf->intra_sf.chroma_intra_pruning_with_hog = 4;
@@ -1582,9 +1586,11 @@ static void set_rt_speed_feature_framesize_dependent(const AV1_COMP *const cpi,
     }
     sf->rt_sf.partition_direct_merging = 0;
     sf->hl_sf.accurate_bit_estimate = 0;
-    // TODO(marpan): Look into why there is regression with
-    // estimate_motion_for_var_based_partition > 0 for screen.
-    sf->rt_sf.estimate_motion_for_var_based_partition = 0;
+    // This feature is for nonrd_pickmode and  non-svc for now.
+    if (sf->rt_sf.use_nonrd_pick_mode && !cpi->ppi->use_svc)
+      sf->rt_sf.estimate_motion_for_var_based_partition = 1;
+    else
+      sf->rt_sf.estimate_motion_for_var_based_partition = 0;
   }
   if (is_lossless_requested(&cpi->oxcf.rc_cfg)) {
     sf->rt_sf.use_rtc_tf = 0;
@@ -2009,6 +2015,7 @@ static AOM_INLINE void init_inter_sf(INTER_MODE_SPEED_FEATURES *inter_sf) {
   inter_sf->model_based_post_interp_filter_breakout = 0;
   inter_sf->reduce_inter_modes = 0;
   inter_sf->alt_ref_search_fp = 0;
+  inter_sf->prune_single_ref = 0;
   inter_sf->prune_comp_ref_frames = 0;
   inter_sf->selective_ref_frame = 0;
   inter_sf->prune_ref_frame_for_rect_partitions = 0;

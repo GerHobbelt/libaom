@@ -157,21 +157,29 @@ if(NOT BUILD_SHARED_LIBS)
               "${AOM_ROOT}/test/simd_cmp_impl.h"
               "${AOM_ROOT}/test/simd_impl.h")
 
-  list(APPEND AOM_UNIT_TEST_COMMON_INTRIN_NEON
-              "${AOM_ROOT}/test/simd_cmp_neon.cc")
-  add_to_libaom_test_srcs(AOM_UNIT_TEST_COMMON_INTRIN_NEON)
+  if(HAVE_NEON)
+    list(APPEND AOM_UNIT_TEST_COMMON_INTRIN_NEON
+                "${AOM_ROOT}/test/simd_cmp_neon.cc")
+    add_to_libaom_test_srcs(AOM_UNIT_TEST_COMMON_INTRIN_NEON)
+  endif()
 
-  list(APPEND AOM_UNIT_TEST_COMMON_INTRIN_SSE2
-              "${AOM_ROOT}/test/simd_cmp_sse2.cc")
-  add_to_libaom_test_srcs(AOM_UNIT_TEST_COMMON_INTRIN_SSE2)
+  if(HAVE_SSE2)
+    list(APPEND AOM_UNIT_TEST_COMMON_INTRIN_SSE2
+                "${AOM_ROOT}/test/simd_cmp_sse2.cc")
+    add_to_libaom_test_srcs(AOM_UNIT_TEST_COMMON_INTRIN_SSE2)
+  endif()
 
-  list(APPEND AOM_UNIT_TEST_COMMON_INTRIN_SSSE3
-              "${AOM_ROOT}/test/simd_cmp_ssse3.cc")
-  add_to_libaom_test_srcs(AOM_UNIT_TEST_COMMON_INTRIN_SSSE3)
+  if(HAVE_SSSE3)
+    list(APPEND AOM_UNIT_TEST_COMMON_INTRIN_SSSE3
+                "${AOM_ROOT}/test/simd_cmp_ssse3.cc")
+    add_to_libaom_test_srcs(AOM_UNIT_TEST_COMMON_INTRIN_SSSE3)
+  endif()
 
-  list(APPEND AOM_UNIT_TEST_COMMON_INTRIN_AVX2
-              "${AOM_ROOT}/test/simd_cmp_avx2.cc")
-  add_to_libaom_test_srcs(AOM_UNIT_TEST_COMMON_INTRIN_AVX2)
+  if(HAVE_AVX2)
+    list(APPEND AOM_UNIT_TEST_COMMON_INTRIN_AVX2
+                "${AOM_ROOT}/test/simd_cmp_avx2.cc")
+    add_to_libaom_test_srcs(AOM_UNIT_TEST_COMMON_INTRIN_AVX2)
+  endif()
 
   list(APPEND AOM_UNIT_TEST_ENCODER_SOURCES
               "${AOM_ROOT}/test/arf_freq_test.cc"
@@ -497,9 +505,6 @@ function(setup_aom_test_targets)
 
   target_link_libraries(test_libaom ${AOM_LIB_LINK_TYPE} ${AOM_LIB} aom_gtest)
 
-  if(CONFIG_LIBYUV)
-    target_sources(test_libaom PRIVATE $<TARGET_OBJECTS:yuv>)
-  endif()
   if(CONFIG_WEBM_IO)
     target_sources(test_libaom PRIVATE $<TARGET_OBJECTS:webm>)
   endif()
