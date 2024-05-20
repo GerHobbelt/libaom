@@ -341,9 +341,12 @@ static int search_new_mv(AV1_COMP *cpi, MACROBLOCK *x,
 
     if (bsize < BLOCK_16X16) return -1;
 
+    int me_search_size_col = block_size_wide[bsize] >> 1;
+    int me_search_size_row = block_size_high[bsize] >> 1;
     tmp_sad = av1_int_pro_motion_estimation(
         cpi, x, bsize, mi_row, mi_col,
-        &x->mbmi_ext.ref_mv_stack[ref_frame][0].this_mv.as_mv, &y_sad_zero, 1);
+        &x->mbmi_ext.ref_mv_stack[ref_frame][0].this_mv.as_mv, &y_sad_zero,
+        me_search_size_col, me_search_size_row);
 
     if (tmp_sad > x->pred_mv_sad[LAST_FRAME]) return -1;
 
@@ -3246,7 +3249,9 @@ void av1_nonrd_pick_inter_mode_sb(AV1_COMP *cpi, TileDataEnc *tile_data,
   if (cpi->oxcf.tune_cfg.content == AOM_CONTENT_SCREEN &&
       !x->force_zeromv_skip_for_blk &&
       x->content_state_sb.source_sad_nonrd != kZeroSad &&
-      x->source_variance == 0 && bsize < cm->seq_params->sb_size) {
+      x->source_variance == 0 && bsize < cm->seq_params->sb_size &&
+      search_state.yv12_mb[LAST_FRAME][0].width == cm->width &&
+      search_state.yv12_mb[LAST_FRAME][0].height == cm->height) {
     set_block_source_sad(cpi, x, bsize, &search_state.yv12_mb[LAST_FRAME][0]);
   }
 

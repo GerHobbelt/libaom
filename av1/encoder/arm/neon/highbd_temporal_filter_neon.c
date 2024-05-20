@@ -114,8 +114,8 @@ static void highbd_apply_temporal_filter(
   vmask2[3] = k1111;
 
   uint32_t row = 0;
-  uint32_t col = 0;
   do {
+    uint32_t col = 0;
     const uint32_t *src = frame_sse + row * frame_sse_stride;
     if (row == 0) {
       vsrc[2][0] = vld1q_u32(src);
@@ -160,7 +160,7 @@ static void highbd_apply_temporal_filter(
     acc_5x5_neon[row][0] = sum_kernel5x5_mask_single(vsrc, k0113);
     acc_5x5_neon[row][1] = sum_kernel5x5_mask_single(vsrc, k1112);
 
-    col = 4;
+    col += 4;
     src += 4;
     // Traverse 4 columns at a time
     do {
@@ -321,8 +321,7 @@ void av1_highbd_apply_temporal_filter_neon(
   double s_decay = pow((double)filter_strength / TF_STRENGTH_THRESHOLD, 2);
   s_decay = CLIP(s_decay, 1e-5, 1);
   double d_factor[4] = { 0 };
-  // Add padding to frame_sse
-  uint32_t frame_sse[(BW + 4) * BH] = { 0 };
+  uint32_t frame_sse[BW * BH] = { 0 };
   uint32_t luma_sse_sum[BW * BH] = { 0 };
   uint16_t *pred = CONVERT_TO_SHORTPTR(pred8);
 
@@ -371,14 +370,14 @@ void av1_highbd_apply_temporal_filter_neon(
             for (int jj = 0; jj < (1 << ss_x_shift); ++jj) {
               const int yy = (i << ss_y_shift) + ii;  // Y-coord on Y-plane.
               const int xx = (j << ss_x_shift) + jj;  // X-coord on Y-plane.
-              luma_sse_sum[i * BW + j] +=
-                  frame_sse[yy * frame_sse_stride + xx + 2];
+              const int ww = frame_sse_stride
+                             << ss_x_shift;  // Width of Y-plane.
+              luma_sse_sum[i * BW + j] += frame_sse[yy * ww + xx];
             }
           }
         }
       }
     }
-
     get_squared_error(ref, frame_stride, pred + plane_offset, plane_w, plane_w,
                       plane_h, frame_sse, frame_sse_stride);
 

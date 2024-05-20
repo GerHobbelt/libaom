@@ -19,6 +19,7 @@
 #include "av1/encoder/ethread.h"
 #include "av1/encoder/global_motion_facade.h"
 #include "av1/encoder/intra_mode_search_utils.h"
+#include "av1/encoder/pickcdef.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -81,6 +82,9 @@ static AOM_INLINE void alloc_compressor_data(AV1_COMP *cpi) {
   av1_setup_sms_tree(cpi, &cpi->td);
   cpi->td.firstpass_ctx =
       av1_alloc_pmc(cpi, BLOCK_16X16, &cpi->td.shared_coeff_buf);
+  if (!cpi->td.firstpass_ctx)
+    aom_internal_error(cm->error, AOM_CODEC_MEM_ERROR,
+                       "Failed to allocate PICK_MODE_CONTEXT");
 }
 
 // Allocate mbmi buffers which are used to store mode information at block
@@ -274,6 +278,12 @@ static AOM_INLINE void dealloc_compressor_data(AV1_COMP *cpi) {
   // single-threaded encode are freed in case of an error during gm.
   gm_dealloc_data(&cpi->td.gm_data);
 
+  // This call ensures that CDEF search context buffers are deallocated in case
+  // of an error during cdef search.
+  av1_cdef_dealloc_data(cpi->cdef_search_ctx);
+  aom_free(cpi->cdef_search_ctx);
+  cpi->cdef_search_ctx = NULL;
+
   av1_dealloc_src_diff_buf(&cpi->td.mb, av1_num_planes(cm));
 
   av1_free_txb_buf(cpi);
@@ -418,9 +428,11 @@ static AOM_INLINE YV12_BUFFER_CONFIG *realloc_and_scale_source(
                        "Failed to reallocate scaled source buffer");
   assert(cpi->scaled_source.y_crop_width == scaled_width);
   assert(cpi->scaled_source.y_crop_height == scaled_height);
-  av1_resize_and_extend_frame_nonnormative(
-      cpi->unscaled_source, &cpi->scaled_source, (int)cm->seq_params->bit_depth,
-      num_planes);
+  if (!av1_resize_and_extend_frame_nonnormative(
+          cpi->unscaled_source, &cpi->scaled_source,
+          (int)cm->seq_params->bit_depth, num_planes))
+    aom_internal_error(cm->error, AOM_CODEC_MEM_ERROR,
+                       "Failed to reallocate buffers during resize");
   return &cpi->scaled_source;
 }
 

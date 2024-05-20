@@ -255,7 +255,7 @@ if (aom_config("CONFIG_AV1_HIGHBITDEPTH") eq "yes") {
 
 # build compound seg mask functions
 add_proto qw/void av1_build_compound_diffwtd_mask/, "uint8_t *mask, DIFFWTD_MASK_TYPE mask_type, const uint8_t *src0, int src0_stride, const uint8_t *src1, int src1_stride, int h, int w";
-specialize qw/av1_build_compound_diffwtd_mask sse4_1 avx2/;
+specialize qw/av1_build_compound_diffwtd_mask neon sse4_1 avx2/;
 
 if (aom_config("CONFIG_AV1_HIGHBITDEPTH") eq "yes") {
   add_proto qw/void av1_build_compound_diffwtd_mask_highbd/, "uint8_t *mask, DIFFWTD_MASK_TYPE mask_type, const uint8_t *src0, int src0_stride, const uint8_t *src1, int src1_stride, int h, int w, int bd";
@@ -419,7 +419,7 @@ if (aom_config("CONFIG_AV1_ENCODER") eq "yes") {
   # ENCODEMB INVOKE
   if (aom_config("CONFIG_AV1_HIGHBITDEPTH") eq "yes") {
     add_proto qw/int64_t av1_highbd_block_error/, "const tran_low_t *coeff, const tran_low_t *dqcoeff, intptr_t block_size, int64_t *ssz, int bd";
-    specialize qw/av1_highbd_block_error sse2 avx2/;
+    specialize qw/av1_highbd_block_error sse2 avx2 neon/;
   }
 
   if (aom_config("CONFIG_AV1_HIGHBITDEPTH") eq "yes") {
@@ -496,11 +496,12 @@ if (aom_config("CONFIG_AV1_ENCODER") eq "yes") {
 
   # Global motion
   if (aom_config("CONFIG_REALTIME_ONLY") ne "yes") {
-    add_proto qw/int64_t av1_calc_frame_error/, "const uint8_t *const ref, int stride, const uint8_t *const dst, int p_width, int p_height, int p_stride";
+    add_proto qw/int64_t av1_calc_frame_error/, "const uint8_t *const ref, int ref_stride, const uint8_t *const dst, int dst_stride, int p_width, int p_height";
     specialize qw/av1_calc_frame_error sse2 avx2/;
 
     if (aom_config("CONFIG_AV1_HIGHBITDEPTH") eq "yes") {
-      add_proto qw/int64_t av1_calc_highbd_frame_error/, "const uint16_t *const ref, int stride, const uint16_t *const dst, int p_width, int p_height, int p_stride, int bd";
+      add_proto qw/int64_t av1_calc_highbd_frame_error/, "const uint16_t *const ref, int ref_stride, const uint16_t *const dst, int dst_stride, int p_width, int p_height, int bd";
+      specialize qw/av1_calc_highbd_frame_error sse2 avx2/;
     }
   }
 }
@@ -608,14 +609,16 @@ if(aom_config("CONFIG_AV1_HIGHBITDEPTH") eq "yes") {
 
 # INTRA_EDGE functions
 add_proto qw/void av1_filter_intra_edge/, "uint8_t *p, int sz, int strength";
-specialize qw/av1_filter_intra_edge sse4_1/;
+specialize qw/av1_filter_intra_edge sse4_1 neon/;
 add_proto qw/void av1_upsample_intra_edge/, "uint8_t *p, int sz";
-specialize qw/av1_upsample_intra_edge sse4_1/;
+specialize qw/av1_upsample_intra_edge sse4_1 neon/;
 
-add_proto qw/void av1_filter_intra_edge_high/, "uint16_t *p, int sz, int strength";
-specialize qw/av1_filter_intra_edge_high sse4_1/;
-add_proto qw/void av1_upsample_intra_edge_high/, "uint16_t *p, int sz, int bd";
-specialize qw/av1_upsample_intra_edge_high sse4_1/;
+if (aom_config("CONFIG_AV1_HIGHBITDEPTH") eq "yes") {
+  add_proto qw/void av1_highbd_filter_intra_edge/, "uint16_t *p, int sz, int strength";
+  specialize qw/av1_highbd_filter_intra_edge sse4_1 neon/;
+  add_proto qw/void av1_highbd_upsample_intra_edge/, "uint16_t *p, int sz, int bd";
+  specialize qw/av1_highbd_upsample_intra_edge sse4_1 neon/;
+}
 
 # CFL
 add_proto qw/cfl_subtract_average_fn cfl_get_subtract_average_fn/, "TX_SIZE tx_size";

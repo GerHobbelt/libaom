@@ -1413,7 +1413,6 @@ static void setup_planes(AV1_COMP *cpi, MACROBLOCK *x, unsigned int *y_sad,
     mi->mv[0].as_int = 0;
     mi->interp_filters = av1_broadcast_interp_filter(BILINEAR);
 
-    int is_screen = cpi->oxcf.tune_cfg.content == AOM_CONTENT_SCREEN;
     int est_motion = cpi->sf.rt_sf.estimate_motion_for_var_based_partition;
     // TODO(b/290596301): Look into adjusting this condition.
     // There is regression on color content when
@@ -1425,17 +1424,18 @@ static void setup_planes(AV1_COMP *cpi, MACROBLOCK *x, unsigned int *y_sad,
       if (xd->mb_to_right_edge >= 0 && xd->mb_to_bottom_edge >= 0) {
         // For screen only do int_pro_motion for spatial variance above
         // threshold and motion level above LowSad.
-        if (!is_screen ||
-            (x->source_variance > 100 && source_sad_nonrd > kLowSad)) {
-          int me_search_par =
-              !is_screen ? 1
-              : (bsize == BLOCK_64X64 && cm->width * cm->height >= 1280 * 720)
-                  ? 3
-                  : 2;
+        if (x->source_variance > 100 && source_sad_nonrd > kLowSad) {
+          int is_screen = cpi->oxcf.tune_cfg.content == AOM_CONTENT_SCREEN;
+          int me_search_size_col =
+              is_screen ? 96 : block_size_wide[cm->seq_params->sb_size] >> 1;
+          // For screen use larger search size row motion to capture
+          // vertical scroll, which can be larger motion.
+          int me_search_size_row =
+              is_screen ? 192 : block_size_high[cm->seq_params->sb_size] >> 1;
           unsigned int y_sad_zero;
           *y_sad = av1_int_pro_motion_estimation(
               cpi, x, cm->seq_params->sb_size, mi_row, mi_col, &kZeroMv,
-              &y_sad_zero, me_search_par);
+              &y_sad_zero, me_search_size_col, me_search_size_row);
           // The logic below selects whether the motion estimated in the
           // int_pro_motion() will be used in nonrd_pickmode. Only do this
           // for screen for now.
