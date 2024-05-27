@@ -674,6 +674,7 @@ static aom_codec_err_t validate_config(aom_codec_alg_priv_t *ctx,
   RANGE_CHECK(cfg, g_timebase.num, 1, cfg->g_timebase.den);
   RANGE_CHECK_HI(cfg, g_profile, MAX_PROFILES - 1);
 
+  RANGE_CHECK_HI(cfg, rc_target_bitrate, 2000000);
   RANGE_CHECK_HI(cfg, rc_max_quantizer, 63);
   RANGE_CHECK_HI(cfg, rc_min_quantizer, cfg->rc_max_quantizer);
   RANGE_CHECK_BOOL(extra_cfg, lossless);
@@ -1034,39 +1035,22 @@ static void set_encoder_config(AV1EncoderConfig *oxcf,
   }
 
   TuneCfg *const tune_cfg = &oxcf->tune_cfg;
-
   FrameDimensionCfg *const frm_dim_cfg = &oxcf->frm_dim_cfg;
-
   TileConfig *const tile_cfg = &oxcf->tile_cfg;
-
   ResizeCfg *const resize_cfg = &oxcf->resize_cfg;
-
   GFConfig *const gf_cfg = &oxcf->gf_cfg;
-
   PartitionCfg *const part_cfg = &oxcf->part_cfg;
-
   IntraModeCfg *const intra_mode_cfg = &oxcf->intra_mode_cfg;
-
   TxfmSizeTypeCfg *const txfm_cfg = &oxcf->txfm_cfg;
-
   CompoundTypeCfg *const comp_type_cfg = &oxcf->comp_type_cfg;
-
   SuperResCfg *const superres_cfg = &oxcf->superres_cfg;
-
   KeyFrameCfg *const kf_cfg = &oxcf->kf_cfg;
-
   DecoderModelCfg *const dec_model_cfg = &oxcf->dec_model_cfg;
-
   RateControlCfg *const rc_cfg = &oxcf->rc_cfg;
-
   QuantizationCfg *const q_cfg = &oxcf->q_cfg;
-
   ColorCfg *const color_cfg = &oxcf->color_cfg;
-
   InputCfg *const input_cfg = &oxcf->input_cfg;
-
   AlgoCfg *const algo_cfg = &oxcf->algo_cfg;
-
   ToolCfg *const tool_cfg = &oxcf->tool_cfg;
 
   const int is_vbr = cfg->rc_end_usage == AOM_VBR;
@@ -3348,7 +3332,7 @@ static aom_codec_err_t encoder_encode(aom_codec_alg_priv_t *ctx,
       if (ppi->cpi->oxcf.pass != 1) {
         ppi->total_time_compress_data += cpi->time_compress_data;
         ppi->total_recode_hits += cpi->frame_recode_hits;
-        ppi->total_bytes += cpi->bytes;
+        ppi->total_bytes += (uint64_t)cpi->bytes;
         for (int i = 0; i < MAX_MODES; i++) {
           ppi->total_mode_chosen_counts[i] += cpi->mode_chosen_counts[i];
         }
