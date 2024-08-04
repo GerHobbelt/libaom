@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, Alliance for Open Media. All rights reserved
+ * Copyright (c) 2016, Alliance for Open Media. All rights reserved.
  *
  * This source code is subject to the terms of the BSD 2 Clause License and
  * the Alliance for Open Media Patent License 1.0. If the BSD 2 Clause License
@@ -1608,10 +1608,19 @@ static void set_rt_speed_feature_framesize_dependent(const AV1_COMP *const cpi,
           sf->rt_sf.intra_y_mode_bsize_mask_nrd[i] = INTRA_DC_H_V;
       }
     }
-    if (cpi->rc.max_block_source_sad > 20000 &&
-        cpi->rc.frame_source_sad > 100 && speed >= 6 &&
-        (cpi->rc.percent_blocks_with_motion > 1 ||
-         cpi->svc.last_layer_dropped[0])) {
+    if (speed >= 11 && cpi->rc.high_motion_content_screen_rtc) {
+      sf->rt_sf.higher_thresh_scene_detection = 1;
+      sf->rt_sf.force_only_last_ref = 1;
+      sf->rt_sf.use_nonrd_filter_search = 0;
+      sf->part_sf.fixed_partition_size = BLOCK_32X32;
+      sf->rt_sf.use_fast_fixed_part = 1;
+      sf->rt_sf.increase_source_sad_thresh = 1;
+      sf->rt_sf.selective_cdf_update = 1;
+      sf->mv_sf.search_method = FAST_DIAMOND;
+    } else if (cpi->rc.max_block_source_sad > 20000 &&
+               cpi->rc.frame_source_sad > 100 && speed >= 6 &&
+               (cpi->rc.percent_blocks_with_motion > 1 ||
+                cpi->svc.last_layer_dropped[0])) {
       sf->mv_sf.search_method = NSTEP;
       sf->rt_sf.fullpel_search_step_param = 2;
     }
@@ -2264,6 +2273,7 @@ static AOM_INLINE void init_rt_sf(REAL_TIME_SPEED_FEATURES *rt_sf) {
   rt_sf->source_metrics_sb_nonrd = 0;
   rt_sf->overshoot_detection_cbr = NO_DETECTION;
   rt_sf->check_scene_detection = 0;
+  rt_sf->rc_adjust_keyframe = 0;
   rt_sf->prefer_large_partition_blocks = 0;
   rt_sf->use_temporal_noise_estimate = 0;
   rt_sf->fullpel_search_step_param = 0;

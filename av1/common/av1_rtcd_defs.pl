@@ -1,5 +1,5 @@
 ##
-## Copyright (c) 2017, Alliance for Open Media. All rights reserved
+## Copyright (c) 2017, Alliance for Open Media. All rights reserved.
 ##
 ## This source code is subject to the terms of the BSD 2 Clause License and
 ## the Alliance for Open Media Patent License 1.0. If the BSD 2 Clause License
@@ -98,7 +98,7 @@ if ($opts{arch} eq "x86_64") {
 }
 
 add_proto qw/void av1_convolve_horiz_rs/, "const uint8_t *src, int src_stride, uint8_t *dst, int dst_stride, int w, int h, const int16_t *x_filters, int x0_qn, int x_step_qn";
-specialize qw/av1_convolve_horiz_rs sse4_1/;
+specialize qw/av1_convolve_horiz_rs sse4_1 neon/;
 
 if(aom_config("CONFIG_AV1_HIGHBITDEPTH") eq "yes") {
   add_proto qw/void av1_highbd_convolve_horiz_rs/, "const uint16_t *src, int src_stride, uint16_t *dst, int dst_stride, int w, int h, const int16_t *x_filters, int x0_qn, int x_step_qn, int bd";
@@ -121,7 +121,12 @@ specialize qw/av1_dr_prediction_z3 sse4_1 avx2 neon/;
 
 # FILTER_INTRA predictor functions
 add_proto qw/void av1_filter_intra_predictor/, "uint8_t *dst, ptrdiff_t stride, TX_SIZE tx_size, const uint8_t *above, const uint8_t *left, int mode";
-specialize qw/av1_filter_intra_predictor sse4_1 neon/;
+# TODO(aomedia:349436249): enable NEON for armv7 after SIGBUS is fixed.
+if (aom_config("AOM_ARCH_ARM") eq "yes" && aom_config("AOM_ARCH_AARCH64") eq "") {
+  specialize qw/av1_filter_intra_predictor sse4_1/;
+} else {
+  specialize qw/av1_filter_intra_predictor sse4_1 neon/;
+}
 
 # High bitdepth functions
 
@@ -149,43 +154,6 @@ specialize qw/av1_inv_txfm_add ssse3 avx2 neon/;
 
 add_proto qw/void av1_highbd_inv_txfm_add/, "const tran_low_t *input, uint8_t *dest, int stride, const TxfmParam *txfm_param";
 specialize qw/av1_highbd_inv_txfm_add sse4_1 avx2 neon/;
-
-add_proto qw/void av1_highbd_inv_txfm_add_4x4/,  "const tran_low_t *input, uint8_t *dest, int stride, const TxfmParam *txfm_param";
-specialize qw/av1_highbd_inv_txfm_add_4x4 sse4_1 neon/;
-add_proto qw/void av1_highbd_inv_txfm_add_8x8/,  "const tran_low_t *input, uint8_t *dest, int stride, const TxfmParam *txfm_param";
-specialize qw/av1_highbd_inv_txfm_add_8x8 sse4_1 neon/;
-add_proto qw/void av1_highbd_inv_txfm_add_4x8/,  "const tran_low_t *input, uint8_t *dest, int stride, const TxfmParam *txfm_param";
-specialize qw/av1_highbd_inv_txfm_add_4x8 sse4_1 neon/;
-add_proto qw/void av1_highbd_inv_txfm_add_8x4/,  "const tran_low_t *input, uint8_t *dest, int stride, const TxfmParam *txfm_param";
-specialize qw/av1_highbd_inv_txfm_add_8x4 sse4_1 neon/;
-add_proto qw/void av1_highbd_inv_txfm_add_4x16/,  "const tran_low_t *input, uint8_t *dest, int stride, const TxfmParam *txfm_param";
-specialize qw/av1_highbd_inv_txfm_add_4x16 sse4_1 neon/;
-add_proto qw/void av1_highbd_inv_txfm_add_16x4/,  "const tran_low_t *input, uint8_t *dest, int stride, const TxfmParam *txfm_param";
-specialize qw/av1_highbd_inv_txfm_add_16x4 sse4_1 neon/;
-add_proto qw/void av1_highbd_inv_txfm_add_8x16/,  "const tran_low_t *input, uint8_t *dest, int stride, const TxfmParam *txfm_param";
-specialize qw/av1_highbd_inv_txfm_add_8x16  neon/;
-add_proto qw/void av1_highbd_inv_txfm_add_16x8/,  "const tran_low_t *input, uint8_t *dest, int stride, const TxfmParam *txfm_param";
-specialize qw/av1_highbd_inv_txfm_add_16x8  neon/;
-add_proto qw/void av1_highbd_inv_txfm_add_16x32/,  "const tran_low_t *input, uint8_t *dest, int stride, const TxfmParam *txfm_param";
-specialize qw/av1_highbd_inv_txfm_add_16x32  neon/;
-add_proto qw/void av1_highbd_inv_txfm_add_32x16/,  "const tran_low_t *input, uint8_t *dest, int stride, const TxfmParam *txfm_param";
-specialize qw/av1_highbd_inv_txfm_add_32x16  neon/;
-add_proto qw/void av1_highbd_inv_txfm_add_32x32/,  "const tran_low_t *input, uint8_t *dest, int stride, const TxfmParam *txfm_param";
-specialize qw/av1_highbd_inv_txfm_add_32x32  neon/;
-add_proto qw/void av1_highbd_inv_txfm_add_32x64/,  "const tran_low_t *input, uint8_t *dest, int stride, const TxfmParam *txfm_param";
-specialize qw/av1_highbd_inv_txfm_add_32x64  neon/;
-add_proto qw/void av1_highbd_inv_txfm_add_64x32/,  "const tran_low_t *input, uint8_t *dest, int stride, const TxfmParam *txfm_param";
-specialize qw/av1_highbd_inv_txfm_add_64x32  neon/;
-add_proto qw/void av1_highbd_inv_txfm_add_64x64/,  "const tran_low_t *input, uint8_t *dest, int stride, const TxfmParam *txfm_param";
-specialize qw/av1_highbd_inv_txfm_add_64x64  neon/;
-add_proto qw/void av1_highbd_inv_txfm_add_8x32/,  "const tran_low_t *input, uint8_t *dest, int stride, const TxfmParam *txfm_param";
-specialize qw/av1_highbd_inv_txfm_add_32x32  neon/;
-add_proto qw/void av1_highbd_inv_txfm_add_32x8/,  "const tran_low_t *input, uint8_t *dest, int stride, const TxfmParam *txfm_param";
-specialize qw/av1_highbd_inv_txfm_add_32x64  neon/;
-add_proto qw/void av1_highbd_inv_txfm_add_16x64/,  "const tran_low_t *input, uint8_t *dest, int stride, const TxfmParam *txfm_param";
-specialize qw/av1_highbd_inv_txfm_add_64x32  neon/;
-add_proto qw/void av1_highbd_inv_txfm_add_64x16/,  "const tran_low_t *input, uint8_t *dest, int stride, const TxfmParam *txfm_param";
-specialize qw/av1_highbd_inv_txfm_add_64x64  neon/;
 
 add_proto qw/void av1_inv_txfm2d_add_4x4/,  "const tran_low_t *input, uint8_t *dest, int stride, TX_TYPE tx_type, const int bd";
 specialize qw/av1_inv_txfm2d_add_4x4 neon/;

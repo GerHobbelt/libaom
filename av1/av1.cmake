@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2017, Alliance for Open Media. All rights reserved
+# Copyright (c) 2017, Alliance for Open Media. All rights reserved.
 #
 # This source code is subject to the terms of the BSD 2 Clause License and the
 # Alliance for Open Media Patent License 1.0. If the BSD 2 Clause License was
@@ -384,6 +384,7 @@ list(APPEND AOM_AV1_ENCODER_INTRIN_ARM_CRC32
             "${AOM_ROOT}/av1/encoder/arm/hash_arm_crc32.c")
 
 list(APPEND AOM_AV1_COMMON_INTRIN_NEON
+            "${AOM_ROOT}/av1/common/arm/av1_convolve_horiz_rs_neon.c"
             "${AOM_ROOT}/av1/common/arm/av1_convolve_scale_neon.c"
             "${AOM_ROOT}/av1/common/arm/av1_inv_txfm_neon.c"
             "${AOM_ROOT}/av1/common/arm/av1_inv_txfm_neon.h"
@@ -525,19 +526,30 @@ if(CONFIG_INSPECTION)
 endif()
 
 if(CONFIG_INTERNAL_STATS)
-  list(APPEND AOM_AV1_ENCODER_SOURCES "${AOM_ROOT}/av1/encoder/blockiness.c")
+  list(APPEND AOM_AV1_ENCODER_SOURCES "${AOM_ROOT}/av1/encoder/blockiness.c"
+              "${AOM_ROOT}/av1/encoder/blockiness.h")
 endif()
 
 if(CONFIG_REALTIME_ONLY)
+  list(REMOVE_ITEM AOM_AV1_ENCODER_INTRIN_SSE2
+                   "${AOM_ROOT}/av1/encoder/x86/highbd_temporal_filter_sse2.c"
+                   "${AOM_ROOT}/av1/encoder/x86/temporal_filter_sse2.c")
   list(REMOVE_ITEM AOM_AV1_ENCODER_INTRIN_SSE4_1
                    "${AOM_ROOT}/av1/encoder/x86/pickrst_sse4.c")
 
   list(REMOVE_ITEM AOM_AV1_ENCODER_INTRIN_AVX2
+                   "${AOM_ROOT}/av1/encoder/x86/highbd_temporal_filter_avx2.c"
                    "${AOM_ROOT}/av1/encoder/x86/pickrst_avx2.c"
+                   "${AOM_ROOT}/av1/encoder/x86/temporal_filter_avx2.c"
                    "${AOM_ROOT}/av1/encoder/x86/cnn_avx2.c")
 
   list(REMOVE_ITEM AOM_AV1_ENCODER_INTRIN_NEON
-                   "${AOM_ROOT}/av1/encoder/arm/cnn_neon.c")
+                   "${AOM_ROOT}/av1/encoder/arm/cnn_neon.c"
+                   "${AOM_ROOT}/av1/encoder/arm/highbd_temporal_filter_neon.c"
+                   "${AOM_ROOT}/av1/encoder/arm/temporal_filter_neon.c")
+
+  list(REMOVE_ITEM AOM_AV1_ENCODER_INTRIN_NEON_DOTPROD
+                   "${AOM_ROOT}/av1/encoder/arm/temporal_filter_neon_dotprod.c")
 
   list(REMOVE_ITEM AOM_AV1_ENCODER_SOURCES
                    "${AOM_ROOT}/av1/encoder/cnn.c"

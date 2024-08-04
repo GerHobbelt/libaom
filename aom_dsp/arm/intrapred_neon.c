@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, Alliance for Open Media. All rights reserved
+ * Copyright (c) 2016, Alliance for Open Media. All rights reserved.
  *
  * This source code is subject to the terms of the BSD 2 Clause License and
  * the Alliance for Open Media Patent License 1.0. If the BSD 2 Clause License
@@ -1512,8 +1512,8 @@ static AOM_FORCE_INLINE void dr_prediction_z2_Nx4_above_neon(
     *a1_x = vuzp_u8(v_tmp, vdup_n_u8(0)).val[1];
     *shift0 = vand_u16(vsub_u16(r6, ydx), vdup_n_u16(0x1f));
   } else {
-    *a0_x = load_u8_4x1(above + base_x);
-    *a1_x = load_u8_4x1(above + base_x + 1);
+    *a0_x = load_unaligned_u8_4x1(above + base_x);
+    *a1_x = load_unaligned_u8_4x1(above + base_x + 1);
     *shift0 = vand_u16(vhsub_u16(r6, ydx), vdup_n_u16(0x1f));
   }
 }

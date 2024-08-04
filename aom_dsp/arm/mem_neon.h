@@ -1,11 +1,12 @@
 /*
- *  Copyright (c) 2018, Alliance for Open Media. All Rights Reserved.
+ * Copyright (c) 2018, Alliance for Open Media. All rights reserved.
  *
- *  Use of this source code is governed by a BSD-style license
- *  that can be found in the LICENSE file in the root of the source
- *  tree. An additional intellectual property rights grant can be found
- *  in the file PATENTS.  All contributing project authors may
- *  be found in the AUTHORS file in the root of the source tree.
+ * This source code is subject to the terms of the BSD 2 Clause License and
+ * the Alliance for Open Media Patent License 1.0. If the BSD 2 Clause License
+ * was not distributed with this source code in the LICENSE file, you can
+ * obtain it at www.aomedia.org/license/software. If the Alliance for Open
+ * Media Patent License 1.0 was not distributed with this source code in the
+ * PATENTS file, you can obtain it at www.aomedia.org/license/patent.
  */
 
 #ifndef AOM_AOM_DSP_ARM_MEM_NEON_H_
@@ -947,6 +948,32 @@ static INLINE void load_s16_8x3(const int16_t *s, ptrdiff_t p,
   s += p;
   *s2 = vld1q_s16(s);
 }
+
+#if AOM_ARCH_AARCH64
+#define load_unaligned_u32_2x1_lane(v, p, lane)              \
+  do {                                                       \
+    (v) = vld1_lane_u32((const uint32_t *)(p), (v), (lane)); \
+  } while (0)
+
+#define load_unaligned_u32_4x1_lane(v, p, lane)               \
+  do {                                                        \
+    (v) = vld1q_lane_u32((const uint32_t *)(p), (v), (lane)); \
+  } while (0)
+#else
+#define load_unaligned_u32_2x1_lane(v, p, lane) \
+  do {                                          \
+    uint32_t tmp;                               \
+    memcpy(&tmp, (p), 4);                       \
+    (v) = vset_lane_u32(tmp, (v), (lane));      \
+  } while (0)
+
+#define load_unaligned_u32_4x1_lane(v, p, lane) \
+  do {                                          \
+    uint32_t tmp;                               \
+    memcpy(&tmp, (p), 4);                       \
+    (v) = vsetq_lane_u32(tmp, (v), (lane));     \
+  } while (0)
+#endif
 
 // Load 2 sets of 4 bytes when alignment is not guaranteed.
 static INLINE uint8x8_t load_unaligned_u8(const uint8_t *buf, int stride) {

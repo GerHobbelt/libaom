@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, Alliance for Open Media. All rights reserved
+ * Copyright (c) 2016, Alliance for Open Media. All rights reserved.
  *
  * This source code is subject to the terms of the BSD 2 Clause License and
  * the Alliance for Open Media Patent License 1.0. If the BSD 2 Clause License
@@ -1647,6 +1647,9 @@ typedef struct REAL_TIME_SPEED_FEATURES {
 
   // Check for scene/content change detection on every frame before encoding.
   int check_scene_detection;
+
+  // For keyframes in rtc: adjust the rc_bits_per_mb, to reduce overshoot.
+  int rc_adjust_keyframe;
 
   // For nonrd mode: Prefer larger partition blks in variance based partitioning
   // 0: disabled, 1-3: increasing aggressiveness

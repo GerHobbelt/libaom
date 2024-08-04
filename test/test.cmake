@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2017, Alliance for Open Media. All rights reserved
+# Copyright (c) 2017, Alliance for Open Media. All rights reserved.
 #
 # This source code is subject to the terms of the BSD 2 Clause License and the
 # Alliance for Open Media Patent License 1.0. If the BSD 2 Clause License was
@@ -153,7 +153,7 @@ if(NOT BUILD_SHARED_LIBS)
               "${AOM_ROOT}/test/lpf_test.cc"
               "${AOM_ROOT}/test/scan_test.cc"
               "${AOM_ROOT}/test/selfguided_filter_test.cc"
-              "${AOM_ROOT}/test/simd_cmp_impl.h"
+              "${AOM_ROOT}/test/simd_cmp_impl.inc"
               "${AOM_ROOT}/test/simd_impl.h")
 
   if(HAVE_SSE2)
@@ -198,7 +198,6 @@ if(NOT BUILD_SHARED_LIBS)
               "${AOM_ROOT}/test/blend_a64_mask_1d_test.cc"
               "${AOM_ROOT}/test/blend_a64_mask_test.cc"
               "${AOM_ROOT}/test/comp_avg_pred_test.cc"
-              "${AOM_ROOT}/test/comp_avg_pred_test.h"
               "${AOM_ROOT}/test/comp_mask_pred_test.cc"
               "${AOM_ROOT}/test/disflow_test.cc"
               "${AOM_ROOT}/test/encodemb_test.cc"
@@ -406,8 +405,11 @@ if(ENABLE_TESTS)
     aom_gtest STATIC
     "${AOM_ROOT}/third_party/googletest/src/googletest/src/gtest-all.cc")
   set_property(TARGET aom_gtest PROPERTY FOLDER ${AOM_IDE_TEST_FOLDER})
+  # There are -Wundef warnings in the gtest headers. Tell the compiler to treat
+  # the gtest include directories as system include directories and suppress
+  # compiler warnings in the gtest headers.
   target_include_directories(
-    aom_gtest
+    aom_gtest SYSTEM
     PUBLIC "${AOM_ROOT}/third_party/googletest/src/googletest/include"
     PRIVATE "${AOM_ROOT}/third_party/googletest/src/googletest")
 
@@ -420,16 +422,6 @@ if(ENABLE_TESTS)
       target_compile_definitions(aom_gtest PUBLIC GTEST_HAS_PTHREAD=0)
     endif()
   endif()
-
-  add_library(
-    aom_gmock STATIC
-    "${AOM_ROOT}/third_party/googletest/src/googlemock/src/gmock-all.cc")
-  set_property(TARGET aom_gmock PROPERTY FOLDER ${AOM_IDE_TEST_FOLDER})
-  target_include_directories(
-    aom_gmock
-    PUBLIC "${AOM_ROOT}/third_party/googletest/src/googlemock/include"
-    PRIVATE "${AOM_ROOT}/third_party/googletest/src/googlemock")
-  target_link_libraries(aom_gmock ${AOM_LIB_LINK_TYPE} aom_gtest)
 endif()
 
 # Setup testdata download targets, test build targets, and test run targets. The

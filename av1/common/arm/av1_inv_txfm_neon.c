@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, Alliance for Open Media. All rights reserved
+ * Copyright (c) 2018, Alliance for Open Media. All rights reserved.
  *
  * This source code is subject to the terms of the BSD 2 Clause License and
  * the Alliance for Open Media Patent License 1.0. If the BSD 2 Clause License
@@ -4176,6 +4176,11 @@ static INLINE void lowbd_inv_txfm2d_add_universe_neon(
       break;
   }
 }
+
+// This function is used by av1_inv_txfm2d_test.cc.
+void av1_lowbd_inv_txfm2d_add_neon(const int32_t *input, uint8_t *output,
+                                   int stride, TX_TYPE tx_type, TX_SIZE tx_size,
+                                   int eob);
 
 void av1_lowbd_inv_txfm2d_add_neon(const int32_t *input, uint8_t *output,
                                    int stride, TX_TYPE tx_type, TX_SIZE tx_size,
