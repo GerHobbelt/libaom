@@ -1998,29 +1998,6 @@ static int get_active_best_quality(const AV1_COMP *const cpi,
   return active_best_quality;
 }
 
-// Returns the q_index for a single frame in the GOP.
-// This function assumes that rc_mode == AOM_Q mode.
-int av1_q_mode_get_q_index(int base_q_index, int gf_update_type,
-                           int gf_pyramid_level, int arf_q) {
-  const int is_intrl_arf_boost = gf_update_type == INTNL_ARF_UPDATE;
-  int is_leaf_or_overlay_frame = gf_update_type == LF_UPDATE ||
-                                 gf_update_type == OVERLAY_UPDATE ||
-                                 gf_update_type == INTNL_OVERLAY_UPDATE;
-
-  if (is_leaf_or_overlay_frame) return base_q_index;
-
-  if (!is_intrl_arf_boost) return arf_q;
-
-  int active_best_quality = arf_q;
-  int active_worst_quality = base_q_index;
-
-  while (gf_pyramid_level > 1) {
-    active_best_quality = (active_best_quality + active_worst_quality + 1) / 2;
-    --gf_pyramid_level;
-  }
-  return active_best_quality;
-}
-
 static int rc_pick_q_and_bounds_q_mode(const AV1_COMP *cpi, int width,
                                        int height, int gf_index,
                                        int *bottom_index, int *top_index) {
@@ -3224,7 +3201,8 @@ static void rc_scene_detection_onepass_rt(AV1_COMP *cpi,
     num_mi_rows = cpi->svc.mi_rows_full_resoln;
   }
   int num_zero_temp_sad = 0;
-  uint32_t min_thresh = 10000;
+  uint32_t min_thresh =
+      (cpi->oxcf.tune_cfg.content == AOM_CONTENT_SCREEN) ? 8000 : 10000;
   if (cpi->sf.rt_sf.higher_thresh_scene_detection) {
     min_thresh = cm->width * cm->height <= 320 * 240 && cpi->framerate < 10.0
                      ? 50000
@@ -3236,7 +3214,10 @@ static void rc_scene_detection_onepass_rt(AV1_COMP *cpi,
   uint64_t tmp_sad = 0;
   int num_samples = 0;
   const int thresh =
-      cm->width * cm->height <= 320 * 240 && cpi->framerate < 10.0 ? 5 : 6;
+      ((cm->width * cm->height <= 320 * 240 && cpi->framerate < 10.0) ||
+       (cpi->oxcf.tune_cfg.content == AOM_CONTENT_SCREEN))
+          ? 5
+          : 6;
   // SAD is computed on 64x64 blocks
   const int sb_size_by_mb = (cm->seq_params->sb_size == BLOCK_128X128)
                                 ? (cm->seq_params->mib_size >> 1)

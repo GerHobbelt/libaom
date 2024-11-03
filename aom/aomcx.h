@@ -233,10 +233,16 @@ enum aome_enc_control_id {
    * unsigned int parameter.
    *
    * This parameter controls the level at which rate-distortion optimization of
-   * transform coefficients favours sharpness in the block.
+   * transform coefficients favors sharpness in the block.
    *
-   * Valid range: 0..7. The default is 0. Values 1-7 will avoid eob and skip
-   * block optimization and will change rdmult in favour of block sharpness.
+   * Valid range: 0..7. The default is 0.
+   *
+   * Values 1-7 will avoid eob and skip block optimization and will change
+   * rdmult in favor of block sharpness.
+   *
+   * In all-intra mode: it also sets the `loop_filter_sharpness` syntax element
+   * in the bitstream. Larger values increasingly reduce how much the filtering
+   * can change the sample values on block edges to favor perceived sharpness.
    */
   AOME_SET_SHARPNESS = AOME_SET_ENABLEAUTOALTREF + 2,  // 16
 
@@ -725,8 +731,8 @@ enum aome_enc_control_id {
    * control sets the minimum level of flatness from which the matrices
    * are determined.
    *
-   * By default, the encoder sets this minimum at half the available
-   * range.
+   * By default, the encoder sets this minimum at level 5 (4 in allintra
+   * mode).
    */
   AV1E_SET_QM_MIN = 64,
 
@@ -737,8 +743,8 @@ enum aome_enc_control_id {
    * As quantisation levels increase, the matrices get flatter. This
    * control sets the maximum level of flatness possible.
    *
-   * By default, the encoder sets this maximum at the top of the
-   * available range.
+   * By default, the encoder sets this maximum at level 9 (10 in allintra
+   * mode)
    */
   AV1E_SET_QM_MAX = 65,
 

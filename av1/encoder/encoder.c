@@ -1272,16 +1272,11 @@ AV1_PRIMARY *av1_create_primary_compressor(
 
   SDSFP(BLOCK_16X32, aom_sad_skip_16x32, aom_sad_skip_16x32x4d)
   SDSFP(BLOCK_16X16, aom_sad_skip_16x16, aom_sad_skip_16x16x4d)
-  SDSFP(BLOCK_16X8, aom_sad_skip_16x8, aom_sad_skip_16x8x4d)
   SDSFP(BLOCK_8X16, aom_sad_skip_8x16, aom_sad_skip_8x16x4d)
-  SDSFP(BLOCK_8X8, aom_sad_skip_8x8, aom_sad_skip_8x8x4d)
-
-  SDSFP(BLOCK_4X8, aom_sad_skip_4x8, aom_sad_skip_4x8x4d)
 
 #if !CONFIG_REALTIME_ONLY
   SDSFP(BLOCK_64X16, aom_sad_skip_64x16, aom_sad_skip_64x16x4d)
   SDSFP(BLOCK_16X64, aom_sad_skip_16x64, aom_sad_skip_16x64x4d)
-  SDSFP(BLOCK_32X8, aom_sad_skip_32x8, aom_sad_skip_32x8x4d)
   SDSFP(BLOCK_8X32, aom_sad_skip_8x32, aom_sad_skip_8x32x4d)
   SDSFP(BLOCK_4X16, aom_sad_skip_4x16, aom_sad_skip_4x16x4d)
 #endif
@@ -2651,7 +2646,8 @@ static int encode_without_recode(AV1_COMP *cpi) {
   }
 
   av1_set_quantizer(cm, q_cfg->qm_minlevel, q_cfg->qm_maxlevel, q,
-                    q_cfg->enable_chroma_deltaq, q_cfg->enable_hdr_deltaq);
+                    q_cfg->enable_chroma_deltaq, q_cfg->enable_hdr_deltaq,
+                    cpi->oxcf.mode == ALLINTRA);
   av1_set_speed_features_qindex_dependent(cpi, cpi->oxcf.speed);
   av1_init_quantizer(&cpi->enc_quant_dequant_params, &cm->quant_params,
                      cm->seq_params->bit_depth);
@@ -2665,7 +2661,8 @@ static int encode_without_recode(AV1_COMP *cpi) {
       cpi->rc.high_source_sad) {
     if (av1_encodedframe_overshoot_cbr(cpi, &q)) {
       av1_set_quantizer(cm, q_cfg->qm_minlevel, q_cfg->qm_maxlevel, q,
-                        q_cfg->enable_chroma_deltaq, q_cfg->enable_hdr_deltaq);
+                        q_cfg->enable_chroma_deltaq, q_cfg->enable_hdr_deltaq,
+                        cpi->oxcf.mode == ALLINTRA);
       av1_set_speed_features_qindex_dependent(cpi, cpi->oxcf.speed);
       av1_init_quantizer(&cpi->enc_quant_dequant_params, &cm->quant_params,
                          cm->seq_params->bit_depth);
@@ -2969,7 +2966,8 @@ static int encode_with_recode_loop(AV1_COMP *cpi, size_t *size, uint8_t *dest,
     }
 
     av1_set_quantizer(cm, q_cfg->qm_minlevel, q_cfg->qm_maxlevel, q,
-                      q_cfg->enable_chroma_deltaq, q_cfg->enable_hdr_deltaq);
+                      q_cfg->enable_chroma_deltaq, q_cfg->enable_hdr_deltaq,
+                      oxcf->mode == ALLINTRA);
     av1_set_speed_features_qindex_dependent(cpi, oxcf->speed);
     av1_init_quantizer(&cpi->enc_quant_dequant_params, &cm->quant_params,
                        cm->seq_params->bit_depth);
