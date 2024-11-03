@@ -101,7 +101,6 @@ struct av1_extracfg {
   int deltaq_strength;
   int deltalf_mode;
   unsigned int frame_periodic_boost;
-  aom_bit_depth_t bit_depth;
   aom_tune_content content;
   aom_color_primaries_t color_primaries;
   aom_transfer_characteristics_t transfer_characteristics;
@@ -281,7 +280,6 @@ static const struct av1_extracfg default_extra_cfg = {
   100,                          // deltaq_strength
   0,                            // delta lf mode
   0,                            // frame_periodic_boost
-  AOM_BITS_8,                   // Bit depth
   AOM_CONTENT_DEFAULT,          // content
   AOM_CICP_CP_UNSPECIFIED,      // CICP color primaries
   AOM_CICP_TC_UNSPECIFIED,      // CICP transfer characteristics
@@ -433,7 +431,6 @@ static const struct av1_extracfg default_extra_cfg = {
   100,                          // deltaq_strength
   0,                            // delta lf mode
   0,                            // frame_periodic_boost
-  AOM_BITS_8,                   // Bit depth
   AOM_CONTENT_DEFAULT,          // content
   AOM_CICP_CP_UNSPECIFIED,      // CICP color primaries
   AOM_CICP_TC_UNSPECIFIED,      // CICP transfer characteristics
@@ -561,7 +558,7 @@ struct aom_codec_alg_priv {
   bool monochrome_on_init;
 };
 
-static INLINE int gcd(int64_t a, int b) {
+static inline int gcd(int64_t a, int b) {
   int remainder;
   while (b > 0) {
     remainder = (int)(a % b);
@@ -2680,6 +2677,20 @@ static aom_codec_err_t ctrl_set_max_consec_frame_drop_cbr(
   return AOM_CODEC_OK;
 }
 
+static aom_codec_err_t ctrl_set_max_consec_frame_drop_ms_cbr(
+    aom_codec_alg_priv_t *ctx, va_list args) {
+  AV1_PRIMARY *const ppi = ctx->ppi;
+  AV1_COMP *const cpi = ppi->cpi;
+  const int max_consec_drop_ms =
+      CAST(AV1E_SET_MAX_CONSEC_FRAME_DROP_MS_CBR, args);
+  if (max_consec_drop_ms < 0) return AOM_CODEC_INVALID_PARAM;
+  // max_consec_drop_ms will be converted to frame units inside encoder
+  // based on framerate (which can change dynamically).
+  ctx->oxcf.rc_cfg.max_consec_drop_ms = max_consec_drop_ms;
+  cpi->rc.drop_count_consec = 0;
+  return AOM_CODEC_OK;
+}
+
 static aom_codec_err_t ctrl_set_svc_frame_drop_mode(aom_codec_alg_priv_t *ctx,
                                                     va_list args) {
   AV1_PRIMARY *const ppi = ctx->ppi;
@@ -3003,7 +3014,7 @@ static aom_codec_frame_flags_t get_frame_pkt_flags(const AV1_COMP *cpi,
   return flags;
 }
 
-static INLINE int get_src_border_in_pixels(AV1_COMP *cpi, BLOCK_SIZE sb_size) {
+static inline int get_src_border_in_pixels(AV1_COMP *cpi, BLOCK_SIZE sb_size) {
   if (cpi->oxcf.mode != REALTIME || av1_is_resize_needed(&cpi->oxcf))
     return cpi->oxcf.border_in_pixels;
 
@@ -4610,6 +4621,8 @@ static aom_codec_ctrl_fn_map_t encoder_ctrl_maps[] = {
   { AV1E_SET_SVC_FRAME_DROP_MODE, ctrl_set_svc_frame_drop_mode },
   { AV1E_SET_AUTO_TILES, ctrl_set_auto_tiles },
   { AV1E_SET_POSTENCODE_DROP_RTC, ctrl_set_postencode_drop_rtc },
+  { AV1E_SET_MAX_CONSEC_FRAME_DROP_MS_CBR,
+    ctrl_set_max_consec_frame_drop_ms_cbr },
 
   // Getters
   { AOME_GET_LAST_QUANTIZER, ctrl_get_quantizer },
@@ -4676,13 +4689,13 @@ static const aom_codec_enc_cfg_t encoder_usage_cfg[] = {
       25,           // rc_undershoot_pct
       25,           // rc_overshoot_pct
 
-      6000,  // rc_max_buffer_size
-      4000,  // rc_buffer_initial_size
-      5000,  // rc_buffer_optimal_size
+      6000,  // rc_buf_sz
+      4000,  // rc_buf_initial_sz
+      5000,  // rc_buf_optimal_sz
 
-      50,    // rc_two_pass_vbrbias
-      0,     // rc_two_pass_vbrmin_section
-      2000,  // rc_two_pass_vbrmax_section
+      50,    // rc_2pass_vbr_bias_pct
+      0,     // rc_2pass_vbr_minsection_pct
+      2000,  // rc_2pass_vbr_maxsection_pct
 
       // keyframing settings (kf)
       0,                       // fwd_kf_enabled
@@ -4702,7 +4715,7 @@ static const aom_codec_enc_cfg_t encoder_usage_cfg[] = {
       0,                       // use_fixed_qp_offsets
       { -1, -1, -1, -1, -1 },  // fixed_qp_offsets
       { 0, 128, 128, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0,   0,   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },  // cfg
+        0, 0,   0,   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },  // encoder_cfg
   },
 #endif  // !CONFIG_REALTIME_ONLY
   {
@@ -4747,13 +4760,13 @@ static const aom_codec_enc_cfg_t encoder_usage_cfg[] = {
       25,           // rc_undershoot_pct
       25,           // rc_overshoot_pct
 
-      6000,  // rc_max_buffer_size
-      4000,  // rc_buffer_initial_size
-      5000,  // rc_buffer_optimal_size
+      6000,  // rc_buf_sz
+      4000,  // rc_buf_initial_sz
+      5000,  // rc_buf_optimal_sz
 
-      50,    // rc_two_pass_vbrbias
-      0,     // rc_two_pass_vbrmin_section
-      2000,  // rc_two_pass_vbrmax_section
+      50,    // rc_2pass_vbr_bias_pct
+      0,     // rc_2pass_vbr_minsection_pct
+      2000,  // rc_2pass_vbr_maxsection_pct
 
       // keyframing settings (kf)
       0,                       // fwd_kf_enabled
@@ -4773,7 +4786,7 @@ static const aom_codec_enc_cfg_t encoder_usage_cfg[] = {
       0,                       // use_fixed_qp_offsets
       { -1, -1, -1, -1, -1 },  // fixed_qp_offsets
       { 0, 128, 128, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0,   0,   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },  // cfg
+        0, 0,   0,   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },  // encoder_cfg
   },
 #if !CONFIG_REALTIME_ONLY
   {
@@ -4818,13 +4831,13 @@ static const aom_codec_enc_cfg_t encoder_usage_cfg[] = {
       25,           // rc_undershoot_pct
       25,           // rc_overshoot_pct
 
-      6000,  // rc_max_buffer_size
-      4000,  // rc_buffer_initial_size
-      5000,  // rc_buffer_optimal_size
+      6000,  // rc_buf_sz
+      4000,  // rc_buf_initial_sz
+      5000,  // rc_buf_optimal_sz
 
-      50,    // rc_two_pass_vbrbias
-      0,     // rc_two_pass_vbrmin_section
-      2000,  // rc_two_pass_vbrmax_section
+      50,    // rc_2pass_vbr_bias_pct
+      0,     // rc_2pass_vbr_minsection_pct
+      2000,  // rc_2pass_vbr_maxsection_pct
 
       // keyframing settings (kf)
       0,                       // fwd_kf_enabled
@@ -4844,7 +4857,7 @@ static const aom_codec_enc_cfg_t encoder_usage_cfg[] = {
       0,                       // use_fixed_qp_offsets
       { -1, -1, -1, -1, -1 },  // fixed_qp_offsets
       { 0, 128, 128, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0,   0,   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },  // cfg
+        0, 0,   0,   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },  // encoder_cfg
   },
 #endif  // !CONFIG_REALTIME_ONLY
 };

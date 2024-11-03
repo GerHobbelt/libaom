@@ -250,9 +250,6 @@ endif()
 # ensure RTCD_CONFIG_* are properly set.
 fix_experiment_configs()
 
-# Test compiler support.
-aom_get_inline("INLINE")
-
 # Don't just check for pthread.h, but use the result of the full pthreads
 # including a linking check in FindThreads above.
 set(HAVE_PTHREAD_H ${CMAKE_USE_PTHREADS_INIT})
@@ -346,6 +343,11 @@ else()
   add_compiler_flag_if_supported("-Wformat=2")
   add_c_flag_if_supported("-Wimplicit-function-declaration")
   add_compiler_flag_if_supported("-Wlogical-op")
+  if(CMAKE_C_COMPILER_ID MATCHES "Clang")
+    add_compiler_flag_if_supported("-Wmissing-prototypes")
+  else()
+    add_c_flag_if_supported("-Wmissing-prototypes")
+  endif()
   add_compiler_flag_if_supported("-Wpointer-arith")
   add_compiler_flag_if_supported("-Wshadow")
   add_compiler_flag_if_supported("-Wshorten-64-to-32")

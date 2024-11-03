@@ -2607,9 +2607,8 @@ void av1_rc_update_framerate(AV1_COMP *cpi, int width, int height) {
   RATE_CONTROL *const rc = &cpi->rc;
   const int MBs = av1_get_MBs(width, height);
 
-  const double avg_frame_bandwidth =
-      round(oxcf->rc_cfg.target_bandwidth / cpi->framerate);
-  rc->avg_frame_bandwidth = (int)AOMMIN(avg_frame_bandwidth, INT_MAX);
+  rc->avg_frame_bandwidth = saturate_cast_double_to_int(
+      round(oxcf->rc_cfg.target_bandwidth / cpi->framerate));
 
   int64_t vbr_min_bits =
       (int64_t)rc->avg_frame_bandwidth * oxcf->rc_cfg.vbrmin_section / 100;
@@ -3329,18 +3328,22 @@ static void rc_scene_detection_onepass_rt(AV1_COMP *cpi,
       cpi->rc.high_motion_content_screen_rtc = 1;
       // Compute fast coarse/global motion for 128x128 superblock centered
       // at middle of frames, to determine if motion is scroll.
-      int pos_col = (unscaled_src->y_width >> 1) - 64;
-      int pos_row = (unscaled_src->y_height >> 1) - 64;
-      src_y = unscaled_src->y_buffer + pos_row * src_ystride + pos_col;
-      last_src_y =
-          unscaled_last_src->y_buffer + pos_row * last_src_ystride + pos_col;
-      int best_intmv_col = 0;
-      int best_intmv_row = 0;
-      unsigned int y_sad = estimate_scroll_motion(
-          cpi, src_y, last_src_y, src_ystride, last_src_ystride, BLOCK_128X128,
-          pos_col, pos_row, &best_intmv_col, &best_intmv_row);
-      if (y_sad < 100 && (abs(best_intmv_col) > 16 || abs(best_intmv_row) > 16))
-        cpi->rc.high_motion_content_screen_rtc = 0;
+      // TODO(marpan): Only allow for 8 bit-depth for now.
+      if (cm->seq_params->bit_depth == 8) {
+        int pos_col = (unscaled_src->y_width >> 1) - 64;
+        int pos_row = (unscaled_src->y_height >> 1) - 64;
+        src_y = unscaled_src->y_buffer + pos_row * src_ystride + pos_col;
+        last_src_y =
+            unscaled_last_src->y_buffer + pos_row * last_src_ystride + pos_col;
+        int best_intmv_col = 0;
+        int best_intmv_row = 0;
+        unsigned int y_sad = estimate_scroll_motion(
+            cpi, src_y, last_src_y, src_ystride, last_src_ystride,
+            BLOCK_128X128, pos_col, pos_row, &best_intmv_col, &best_intmv_row);
+        if (y_sad < 100 &&
+            (abs(best_intmv_col) > 16 || abs(best_intmv_row) > 16))
+          cpi->rc.high_motion_content_screen_rtc = 0;
+      }
     }
     // Pass the flag value to all layer frames.
     if (cpi->svc.number_spatial_layers > 1 ||
@@ -3623,7 +3626,7 @@ static void dynamic_resize_one_pass_cbr(AV1_COMP *cpi) {
   return;
 }
 
-static INLINE int set_key_frame(AV1_COMP *cpi, unsigned int frame_flags) {
+static inline int set_key_frame(AV1_COMP *cpi, unsigned int frame_flags) {
   RATE_CONTROL *const rc = &cpi->rc;
   AV1_COMMON *const cm = &cpi->common;
   SVC *const svc = &cpi->svc;
@@ -3680,6 +3683,10 @@ void av1_get_one_pass_rt_params(AV1_COMP *cpi, FRAME_TYPE *const frame_type,
   const int layer =
       LAYER_IDS_TO_IDX(svc->spatial_layer_id, svc->temporal_layer_id,
                        svc->number_temporal_layers);
+  if (cpi->oxcf.rc_cfg.max_consec_drop_ms > 0) {
+    rc->max_consec_drop = saturate_cast_double_to_int(
+        ceil(cpi->oxcf.rc_cfg.max_consec_drop_ms * cpi->framerate / 1000));
+  }
   if (cpi->ppi->use_svc) {
     av1_update_temporal_layer_framerate(cpi);
     av1_restore_layer_context(cpi);

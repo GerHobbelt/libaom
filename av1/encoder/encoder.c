@@ -106,7 +106,7 @@ FILE *yuv_rec_file;
 FILE *yuv_denoised_file = NULL;
 #endif
 
-static INLINE void Scale2Ratio(AOM_SCALING_MODE mode, int *hr, int *hs) {
+static inline void Scale2Ratio(AOM_SCALING_MODE mode, int *hr, int *hs) {
   switch (mode) {
     case AOME_NORMAL:
       *hr = 1;
@@ -376,7 +376,7 @@ void av1_update_frame_size(AV1_COMP *cpi) {
   set_tile_info(cm, &cpi->oxcf.tile_cfg);
 }
 
-static INLINE int does_level_match(int width, int height, double fps,
+static inline int does_level_match(int width, int height, double fps,
                                    int lvl_width, int lvl_height,
                                    double lvl_fps, int lvl_dim_mult) {
   const int64_t lvl_luma_pels = (int64_t)lvl_width * lvl_height;
@@ -969,7 +969,7 @@ void av1_change_config(struct AV1_COMP *cpi, const AV1EncoderConfig *oxcf,
 #endif  // CONFIG_REALTIME_ONLY
 }
 
-static INLINE void init_frame_info(FRAME_INFO *frame_info,
+static inline void init_frame_info(FRAME_INFO *frame_info,
                                    const AV1_COMMON *const cm) {
   const CommonModeInfoParams *const mi_params = &cm->mi_params;
   const SequenceHeader *const seq_params = cm->seq_params;
@@ -985,11 +985,11 @@ static INLINE void init_frame_info(FRAME_INFO *frame_info,
   frame_info->subsampling_y = seq_params->subsampling_y;
 }
 
-static INLINE void init_frame_index_set(FRAME_INDEX_SET *frame_index_set) {
+static inline void init_frame_index_set(FRAME_INDEX_SET *frame_index_set) {
   frame_index_set->show_frame_count = 0;
 }
 
-static INLINE void update_counters_for_show_frame(AV1_COMP *const cpi) {
+static inline void update_counters_for_show_frame(AV1_COMP *const cpi) {
   assert(cpi->common.show_frame);
   cpi->frame_index_set.show_frame_count++;
   cpi->common.current_frame.frame_number++;
@@ -2269,7 +2269,7 @@ void av1_set_frame_size(AV1_COMP *cpi, int width, int height) {
   set_ref_ptrs(cm, xd, LAST_FRAME, LAST_FRAME);
 }
 
-static INLINE int extend_borders_mt(const AV1_COMP *cpi,
+static inline int extend_borders_mt(const AV1_COMP *cpi,
                                     MULTI_THREADED_MODULES stage, int plane) {
   const AV1_COMMON *const cm = &cpi->common;
   if (cpi->mt_info.num_mod_workers[stage] < 2) return 0;
@@ -3483,7 +3483,7 @@ static int encode_with_and_without_superres(AV1_COMP *cpi, size_t *size,
 
 // Conditions to disable cdf_update mode in selective mode for real-time.
 // Handle case for layers, scene change, and resizing.
-static AOM_INLINE int selective_disable_cdf_rtc(const AV1_COMP *cpi) {
+static inline int selective_disable_cdf_rtc(const AV1_COMP *cpi) {
   const AV1_COMMON *const cm = &cpi->common;
   const RATE_CONTROL *const rc = &cpi->rc;
   // For single layer.
@@ -4448,7 +4448,7 @@ void print_internal_stats(AV1_PRIMARY *ppi) {
 }
 #endif  // CONFIG_INTERNAL_STATS
 
-static AOM_INLINE void update_keyframe_counters(AV1_COMP *cpi) {
+static inline void update_keyframe_counters(AV1_COMP *cpi) {
   if (cpi->common.show_frame && cpi->rc.frames_to_key) {
 #if !CONFIG_REALTIME_ONLY
     FIRSTPASS_INFO *firstpass_info = &cpi->ppi->twopass.firstpass_info;
@@ -4469,7 +4469,7 @@ static AOM_INLINE void update_keyframe_counters(AV1_COMP *cpi) {
   }
 }
 
-static AOM_INLINE void update_frames_till_gf_update(AV1_COMP *cpi) {
+static inline void update_frames_till_gf_update(AV1_COMP *cpi) {
   // TODO(weitinglin): Updating this counter for is_frame_droppable
   // is a work-around to handle the condition when a frame is drop.
   // We should fix the cpi->common.show_frame flag
@@ -4482,7 +4482,7 @@ static AOM_INLINE void update_frames_till_gf_update(AV1_COMP *cpi) {
   }
 }
 
-static AOM_INLINE void update_gf_group_index(AV1_COMP *cpi) {
+static inline void update_gf_group_index(AV1_COMP *cpi) {
   // Increment the gf group index ready for the next frame.
   if (is_one_pass_rt_params(cpi) &&
       cpi->svc.spatial_layer_id == cpi->svc.number_spatial_layers - 1) {
@@ -4553,7 +4553,7 @@ static void update_end_of_frame_stats(AV1_COMP *cpi) {
 }
 
 // Updates frame level stats related to global motion
-static AOM_INLINE void update_gm_stats(AV1_COMP *cpi) {
+static inline void update_gm_stats(AV1_COMP *cpi) {
   FRAME_UPDATE_TYPE update_type =
       cpi->ppi->gf_group.update_type[cpi->gf_frame_index];
   int i, is_gm_present = 0;
