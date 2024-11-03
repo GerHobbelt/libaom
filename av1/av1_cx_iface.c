@@ -2183,6 +2183,11 @@ static aom_codec_err_t ctrl_set_enable_cfl_intra(aom_codec_alg_priv_t *ctx,
                                                  va_list args) {
   struct av1_extracfg extra_cfg = ctx->extra_cfg;
   extra_cfg.enable_cfl_intra = CAST(AV1E_SET_ENABLE_CFL_INTRA, args);
+#if CONFIG_REALTIME_ONLY
+  if (extra_cfg.enable_cfl_intra) {
+    ERROR("cfl can't be turned on in realtime only build.");
+  }
+#endif
   return update_extra_cfg(ctx, &extra_cfg);
 }
 
@@ -2816,6 +2821,19 @@ static aom_codec_err_t ctrl_set_auto_intra_tools_off(aom_codec_alg_priv_t *ctx,
   return update_extra_cfg(ctx, &extra_cfg);
 }
 
+// Returns the index of the default_extra_cfg array element for the specified
+// usage. Returns index 0 if not found. This means default_extra_cfg[0] is used
+// for any usage that doesn't have a dedicated element in the default_extra_cfg
+// array.
+static int find_default_extra_cfg_for_usage(unsigned int usage) {
+  for (int i = 0; i < NELEMENTS(default_extra_cfg); ++i) {
+    if (default_extra_cfg[i].usage == usage) {
+      return i;
+    }
+  }
+  return 0;
+}
+
 static aom_codec_err_t encoder_init(aom_codec_ctx_t *ctx) {
   aom_codec_err_t res = AOM_CODEC_OK;
 
@@ -2831,7 +2849,14 @@ static aom_codec_err_t encoder_init(aom_codec_ctx_t *ctx) {
     priv->cfg = *ctx->config.enc;
     ctx->config.enc = &priv->cfg;
 
-    priv->extra_cfg = default_extra_cfg[0];
+    int extra_cfg_idx = 0;
+    if (ctx->init_flags & AOM_CODEC_USE_PRESET) {
+      if (!(ctx->init_flags & AOM_CODEC_USE_EXPERIMENTAL)) {
+        return AOM_CODEC_INCAPABLE;
+      }
+      extra_cfg_idx = find_default_extra_cfg_for_usage(priv->cfg.g_usage);
+    }
+    priv->extra_cfg = default_extra_cfg[extra_cfg_idx];
     // Special handling:
     // By default, if omitted, --enable-cdef = 1.
     // Here we set its default value to 0 when --allintra is turned on.
@@ -3438,21 +3463,32 @@ static aom_codec_err_t encoder_encode(aom_codec_alg_priv_t *ctx,
             aom_uleb_size_in_bytes(obu_payload_size);
 
         const size_t move_offset = obu_header_size + length_field_size;
+        if (cpi_data.frame_size > ctx->cx_data_sz) {
+          aom_internal_error(&ppi->error, AOM_CODEC_ERROR,
+                             "ctx->cx_data buffer overflow");
+        }
+        if (move_offset > ctx->cx_data_sz - cpi_data.frame_size) {
+          aom_internal_error(&ppi->error, AOM_CODEC_ERROR,
+                             "ctx->cx_data buffer full");
+        }
         memmove(ctx->cx_data + move_offset, ctx->cx_data, cpi_data.frame_size);
         obu_header_size = av1_write_obu_header(
             &ppi->level_params, &cpi->frame_header_count,
             OBU_TEMPORAL_DELIMITER,
             ppi->seq_params.has_nonzero_operating_point_idc, 0, ctx->cx_data);
+        if (obu_header_size != 1) {
+          aom_internal_error(&ppi->error, AOM_CODEC_ERROR, NULL);
+        }
 
         // OBUs are preceded/succeeded by an unsigned leb128 coded integer.
-        if (av1_write_uleb_obu_size(obu_header_size, obu_payload_size,
-                                    ctx->cx_data,
-                                    ctx->cx_data_sz) != AOM_CODEC_OK) {
+        if (av1_write_uleb_obu_size(obu_payload_size,
+                                    ctx->cx_data + obu_header_size,
+                                    length_field_size) != AOM_CODEC_OK) {
           aom_internal_error(&ppi->error, AOM_CODEC_ERROR, NULL);
         }
 
         cpi_data.frame_size +=
-            obu_header_size + obu_payload_size + length_field_size;
+            obu_header_size + length_field_size + obu_payload_size;
       }
 
       if (ctx->oxcf.save_as_annexb) {
@@ -3466,11 +3502,18 @@ static aom_codec_err_t encoder_encode(aom_codec_alg_priv_t *ctx,
         // B_PRIME (add frame size)
         const size_t length_field_size =
             aom_uleb_size_in_bytes(cpi_data.frame_size);
+        if (cpi_data.frame_size > cpi_data.cx_data_sz) {
+          aom_internal_error(&ppi->error, AOM_CODEC_ERROR,
+                             "cpi_data.cx_data buffer overflow");
+        }
+        if (length_field_size > cpi_data.cx_data_sz - cpi_data.frame_size) {
+          aom_internal_error(&ppi->error, AOM_CODEC_ERROR,
+                             "cpi_data.cx_data buffer full");
+        }
         memmove(cpi_data.cx_data + length_field_size, cpi_data.cx_data,
                 cpi_data.frame_size);
-        if (av1_write_uleb_obu_size(0, (uint32_t)cpi_data.frame_size,
-                                    cpi_data.cx_data,
-                                    cpi_data.cx_data_sz) != AOM_CODEC_OK) {
+        if (av1_write_uleb_obu_size(cpi_data.frame_size, cpi_data.cx_data,
+                                    length_field_size) != AOM_CODEC_OK) {
           aom_internal_error(&ppi->error, AOM_CODEC_ERROR, NULL);
         }
         cpi_data.frame_size += length_field_size;
@@ -3497,9 +3540,17 @@ static aom_codec_err_t encoder_encode(aom_codec_alg_priv_t *ctx,
         //  B_PRIME (add TU size)
         size_t tu_size = ctx->pending_cx_data_sz;
         const size_t length_field_size = aom_uleb_size_in_bytes(tu_size);
+        if (tu_size > ctx->cx_data_sz) {
+          aom_internal_error(&ppi->error, AOM_CODEC_ERROR,
+                             "ctx->cx_data buffer overflow");
+        }
+        if (length_field_size > ctx->cx_data_sz - tu_size) {
+          aom_internal_error(&ppi->error, AOM_CODEC_ERROR,
+                             "ctx->cx_data buffer full");
+        }
         memmove(ctx->cx_data + length_field_size, ctx->cx_data, tu_size);
-        if (av1_write_uleb_obu_size(0, (uint32_t)tu_size, ctx->cx_data,
-                                    ctx->cx_data_sz) != AOM_CODEC_OK) {
+        if (av1_write_uleb_obu_size(tu_size, ctx->cx_data, length_field_size) !=
+            AOM_CODEC_OK) {
           aom_internal_error(&ppi->error, AOM_CODEC_ERROR, NULL);
         }
         ctx->pending_cx_data_sz += length_field_size;
@@ -3521,9 +3572,13 @@ static aom_codec_err_t encoder_encode(aom_codec_alg_priv_t *ctx,
         // the delayed random access point flag.
         pkt.data.frame.flags |= AOM_FRAME_IS_DELAYED_RANDOM_ACCESS_POINT;
       }
-      pkt.data.frame.duration = (uint32_t)ticks_to_timebase_units(
+      const int64_t duration64 = ticks_to_timebase_units(
           cpi_data.timestamp_ratio,
           cpi_data.ts_frame_end - cpi_data.ts_frame_start);
+      if (duration64 > UINT32_MAX) {
+        aom_internal_error(&ppi->error, AOM_CODEC_ERROR, NULL);
+      }
+      pkt.data.frame.duration = (uint32_t)duration64;
 
       aom_codec_pkt_list_add(&ctx->pkt_list.head, &pkt);
 
@@ -3834,11 +3889,18 @@ static aom_codec_err_t ctrl_set_svc_ref_frame_config(aom_codec_alg_priv_t *ctx,
       va_arg(args, aom_svc_ref_frame_config_t *);
   cpi->ppi->rtc_ref.set_ref_frame_config = 1;
   for (unsigned int i = 0; i < INTER_REFS_PER_FRAME; ++i) {
+    if (data->reference[i] != 0 && data->reference[i] != 1)
+      return AOM_CODEC_INVALID_PARAM;
+    if (data->ref_idx[i] > 7 || data->ref_idx[i] < 0)
+      return AOM_CODEC_INVALID_PARAM;
     cpi->ppi->rtc_ref.reference[i] = data->reference[i];
     cpi->ppi->rtc_ref.ref_idx[i] = data->ref_idx[i];
   }
-  for (unsigned int i = 0; i < REF_FRAMES; ++i)
+  for (unsigned int i = 0; i < REF_FRAMES; ++i) {
+    if (data->refresh[i] != 0 && data->refresh[i] != 1)
+      return AOM_CODEC_INVALID_PARAM;
     cpi->ppi->rtc_ref.refresh[i] = data->refresh[i];
+  }
   cpi->svc.use_flexible_mode = 1;
   cpi->svc.ksvc_fixed_mode = 0;
   return AOM_CODEC_OK;
