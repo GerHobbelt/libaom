@@ -2406,6 +2406,9 @@ static aom_codec_err_t ctrl_set_film_grain_table(aom_codec_alg_priv_t *ctx,
     // this parameter allows NULL as its value
     extra_cfg.film_grain_table_filename = str;
   } else {
+#if CONFIG_REALTIME_ONLY
+    ERROR("film_grain removed from realtime only build.");
+#endif
     const aom_codec_err_t ret = allocate_and_set_string(
         str, default_extra_cfg[0].film_grain_table_filename,
         &extra_cfg.film_grain_table_filename, ctx->ppi->error.detail);
@@ -3115,9 +3118,10 @@ static aom_codec_err_t encoder_encode(aom_codec_alg_priv_t *ctx,
         }
       }
       for (int i = 0; i < ppi->num_fp_contexts - 1; i++) {
-        if (ppi->parallel_frames_data[i].cx_data == NULL) {
-          ppi->parallel_frames_data[i].cx_data_sz = uncompressed_frame_sz;
-          ppi->parallel_frames_data[i].frame_display_order_hint = -1;
+        if (ppi->parallel_frames_data[i].cx_data == NULL ||
+            ppi->parallel_frames_data[i].cx_data_sz < data_sz) {
+          ppi->parallel_frames_data[i].cx_data_sz = data_sz;
+          free(ppi->parallel_frames_data[i].cx_data);
           ppi->parallel_frames_data[i].frame_size = 0;
           ppi->parallel_frames_data[i].cx_data =
               (unsigned char *)malloc(ppi->parallel_frames_data[i].cx_data_sz);
@@ -3453,6 +3457,10 @@ static aom_codec_err_t encoder_encode(aom_codec_alg_priv_t *ctx,
 
       if (!cpi_data.frame_size) continue;
       assert(cpi_data.cx_data != NULL && cpi_data.cx_data_sz != 0);
+      if (cpi_data.frame_size > cpi_data.cx_data_sz) {
+        aom_internal_error(&ppi->error, AOM_CODEC_ERROR,
+                           "cpi_data.cx_data buffer overflow");
+      }
       const int write_temporal_delimiter =
           !cpi->common.spatial_layer_id && !ctx->pending_cx_data_sz;
 
@@ -3463,10 +3471,7 @@ static aom_codec_err_t encoder_encode(aom_codec_alg_priv_t *ctx,
             aom_uleb_size_in_bytes(obu_payload_size);
 
         const size_t move_offset = obu_header_size + length_field_size;
-        if (cpi_data.frame_size > ctx->cx_data_sz) {
-          aom_internal_error(&ppi->error, AOM_CODEC_ERROR,
-                             "ctx->cx_data buffer overflow");
-        }
+        assert(ctx->cx_data_sz == cpi_data.cx_data_sz);
         if (move_offset > ctx->cx_data_sz - cpi_data.frame_size) {
           aom_internal_error(&ppi->error, AOM_CODEC_ERROR,
                              "ctx->cx_data buffer full");
@@ -3487,25 +3492,19 @@ static aom_codec_err_t encoder_encode(aom_codec_alg_priv_t *ctx,
           aom_internal_error(&ppi->error, AOM_CODEC_ERROR, NULL);
         }
 
-        cpi_data.frame_size +=
-            obu_header_size + length_field_size + obu_payload_size;
+        cpi_data.frame_size += move_offset;
       }
 
       if (ctx->oxcf.save_as_annexb) {
-        size_t curr_frame_size = cpi_data.frame_size;
-        if (av1_convert_sect5obus_to_annexb(cpi_data.cx_data,
-                                            &curr_frame_size) != AOM_CODEC_OK) {
+        if (av1_convert_sect5obus_to_annexb(
+                cpi_data.cx_data, cpi_data.cx_data_sz, &cpi_data.frame_size) !=
+            AOM_CODEC_OK) {
           aom_internal_error(&ppi->error, AOM_CODEC_ERROR, NULL);
         }
-        cpi_data.frame_size = curr_frame_size;
 
         // B_PRIME (add frame size)
         const size_t length_field_size =
             aom_uleb_size_in_bytes(cpi_data.frame_size);
-        if (cpi_data.frame_size > cpi_data.cx_data_sz) {
-          aom_internal_error(&ppi->error, AOM_CODEC_ERROR,
-                             "cpi_data.cx_data buffer overflow");
-        }
         if (length_field_size > cpi_data.cx_data_sz - cpi_data.frame_size) {
           aom_internal_error(&ppi->error, AOM_CODEC_ERROR,
                              "cpi_data.cx_data buffer full");
