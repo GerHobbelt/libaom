@@ -20,7 +20,6 @@
 #include "aom_dsp/variance.h"
 #include "aom_mem/aom_mem.h"
 #include "aom_ports/mem.h"
-#include "aom_scale/aom_scale.h"
 #include "aom_scale/yv12config.h"
 #include "aom_util/aom_pthread.h"
 
@@ -1587,14 +1586,6 @@ int av1_firstpass_info_future_count(const FIRSTPASS_INFO *firstpass_info,
                                     int offset_from_cur) {
   if (offset_from_cur < firstpass_info->future_stats_count) {
     return firstpass_info->future_stats_count - offset_from_cur;
-  }
-  return 0;
-}
-
-int av1_firstpass_info_past_count(const FIRSTPASS_INFO *firstpass_info,
-                                  int offset_from_cur) {
-  if (offset_from_cur >= -firstpass_info->past_stats_count) {
-    return offset_from_cur + firstpass_info->past_stats_count;
   }
   return 0;
 }
