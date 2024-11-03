@@ -2403,10 +2403,7 @@ static void loopfilter_frame(AV1_COMP *cpi, AV1_COMMON *cm) {
 
   const int use_loopfilter =
       is_loopfilter_used(cm) && !cpi->mt_info.pipeline_lpf_mt_with_enc;
-  const int use_cdef =
-      is_cdef_used(cm) && (!cpi->active_map.enabled ||
-                           cpi->rc.percent_blocks_inactive <=
-                               cpi->sf.rt_sf.thresh_active_maps_skip_lf_cdef);
+  const int use_cdef = is_cdef_used(cm);
   const int use_superres = av1_superres_scaled(cm);
   const int use_restoration = is_restoration_used(cm);
 
@@ -4881,8 +4878,8 @@ void av1_scale_references_fpmt(AV1_COMP *cpi, int *ref_buffers_used_map) {
 
 // Increments the ref_count of frame buffers referenced by cpi->scaled_ref_buf
 // corresponding to frames in a parallel encode set.
-void av1_increment_scaled_ref_counts_fpmt(BufferPool *buffer_pool,
-                                          int ref_buffers_used_map) {
+static void increment_scaled_ref_counts_fpmt(BufferPool *buffer_pool,
+                                             int ref_buffers_used_map) {
   for (int i = 0; i < buffer_pool->num_frame_bufs; ++i) {
     if (ref_buffers_used_map & (1 << i)) {
       ++buffer_pool->frame_bufs[i].ref_count;
@@ -5134,8 +5131,8 @@ int av1_init_parallel_frame_context(const AV1_COMP_DATA *const first_cpi_data,
     }
   }
 
-  av1_increment_scaled_ref_counts_fpmt(first_cpi->common.buffer_pool,
-                                       *ref_buffers_used_map);
+  increment_scaled_ref_counts_fpmt(first_cpi->common.buffer_pool,
+                                   *ref_buffers_used_map);
 
   // Return the number of frames in the parallel encode set.
   return parallel_frame_count;

@@ -254,6 +254,7 @@ specialize qw/av1_resize_and_extend_frame ssse3 neon/;
 # Encoder functions below this point.
 #
 if (aom_config("CONFIG_AV1_ENCODER") eq "yes") {
+  add_proto qw/void av1_fdwt8x8_uint8_input/, "const uint8_t *input, tran_low_t *output, int stride, int hbd";
 
   # ENCODEMB INVOKE
   add_proto qw/void aom_upsampled_pred/, "MACROBLOCKD *xd, const struct AV1Common *const cm, int mi_row, int mi_col,
@@ -268,12 +269,6 @@ if (aom_config("CONFIG_AV1_ENCODER") eq "yes") {
                                                    int height, int subpel_x_q3, int subpel_y_q3, const uint8_t *ref,
                                                    int ref_stride, int subpel_search";
   specialize qw/aom_comp_avg_upsampled_pred sse2 neon/;
-
-  add_proto qw/void aom_dist_wtd_comp_avg_upsampled_pred/, "MACROBLOCKD *xd, const struct AV1Common *const cm, int mi_row, int mi_col,
-                                                       const MV *const mv, uint8_t *comp_pred, const uint8_t *pred, int width,
-                                                       int height, int subpel_x_q3, int subpel_y_q3, const uint8_t *ref,
-                                                       int ref_stride, const DIST_WTD_COMP_PARAMS *jcp_param, int subpel_search";
-  specialize qw/aom_dist_wtd_comp_avg_upsampled_pred ssse3 neon/;
 
   if (aom_config("CONFIG_AV1_HIGHBITDEPTH") eq "yes") {
     add_proto qw/void aom_highbd_upsampled_pred/, "MACROBLOCKD *xd, const struct AV1Common *const cm, int mi_row, int mi_col,
