@@ -1133,6 +1133,8 @@ enum aome_enc_control_id {
    * - 2 = use modulation for local test
    * - 3 = use modulation for key frame perceptual quality optimization
    * - 4 = use modulation for user rating based perceptual quality optimization
+   * - 5 = use modulation for HDR video
+   * - 6 = use modulation for allintra using Variance Boost
    */
   AV1E_SET_DELTAQ_MODE = 107,
 
@@ -1665,6 +1667,15 @@ typedef enum {
  *
  * Changes the encoder to tune for certain types of input material.
  *
+ * \note
+ * AOM_TUNE_SSIMULACRA2 is restricted to all intra mode (AOM_USAGE_ALL_INTRA).
+ * Setting the tuning option to AOM_TUNE_SSIMULACRA2 causes the following
+ * options to be set (expressed as command-line options):
+ *   * --enable-qm=1
+ *   * --sharpness=7
+ *   * --enable-cdef=3
+ *   * --enable-chroma-deltaq=1
+ *   * --deltaq-mode=6
  */
 typedef enum {
   AOM_TUNE_PSNR = 0,
@@ -1676,6 +1687,14 @@ typedef enum {
   AOM_TUNE_VMAF_NEG_MAX_GAIN = 7,
   AOM_TUNE_BUTTERAUGLI = 8,
   AOM_TUNE_VMAF_SALIENCY_MAP = 9,
+/*!\brief Allows detection of the presence of AOM_TUNE_SSIMULACRA2 at compile
+ * time.
+ */
+#define AOM_HAVE_TUNE_SSIMULACRA2 1
+  /* Increases image quality and consistency, guided by the SSIMULACRA2 metric
+   * and subjective quality checks. Shares the rdmult code with AOM_TUNE_SSIM.
+   */
+  AOM_TUNE_SSIMULACRA2 = 10,
 } aom_tune_metric;
 
 /*!\brief Distortion metric to use for RD optimization.

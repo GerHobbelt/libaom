@@ -10,6 +10,7 @@
  */
 
 #include <math.h>
+#include <stdlib.h>
 
 #include "aom_ports/mem.h"
 
@@ -89,7 +90,7 @@ void av1_vaq_frame_setup(AV1_COMP *cpi) {
   }
 }
 
-int av1_log_block_avg(const AV1_COMP *cpi, MACROBLOCK *x, BLOCK_SIZE bs,
+int av1_log_block_avg(const AV1_COMP *cpi, const MACROBLOCK *x, BLOCK_SIZE bs,
                       int mi_row, int mi_col) {
   // This functions returns the block average of luma block
   unsigned int sum, avg, num_pix;
@@ -119,10 +120,10 @@ int av1_log_block_avg(const AV1_COMP *cpi, MACROBLOCK *x, BLOCK_SIZE bs,
 
 #define DEFAULT_E_MIDPOINT 10.0
 
-static unsigned int haar_ac_energy(MACROBLOCK *x, BLOCK_SIZE bs) {
-  MACROBLOCKD *xd = &x->e_mbd;
+static unsigned int haar_ac_energy(const MACROBLOCK *x, BLOCK_SIZE bs) {
+  const MACROBLOCKD *xd = &x->e_mbd;
   int stride = x->plane[0].src.stride;
-  uint8_t *buf = x->plane[0].src.buf;
+  const uint8_t *buf = x->plane[0].src.buf;
   const int num_8x8_cols = block_size_wide[bs] / 8;
   const int num_8x8_rows = block_size_high[bs] / 8;
   const int hbd = is_cur_buf_hbd(xd);
@@ -133,12 +134,12 @@ static unsigned int haar_ac_energy(MACROBLOCK *x, BLOCK_SIZE bs) {
   return (unsigned int)((uint64_t)var * 256) >> num_pels_log2_lookup[bs];
 }
 
-static double log_block_wavelet_energy(MACROBLOCK *x, BLOCK_SIZE bs) {
+static double log_block_wavelet_energy(const MACROBLOCK *x, BLOCK_SIZE bs) {
   unsigned int haar_sad = haar_ac_energy(x, bs);
   return log1p(haar_sad);
 }
 
-int av1_block_wavelet_energy_level(const AV1_COMP *cpi, MACROBLOCK *x,
+int av1_block_wavelet_energy_level(const AV1_COMP *cpi, const MACROBLOCK *x,
                                    BLOCK_SIZE bs) {
   double energy, energy_midpoint;
   energy_midpoint = (is_stat_consumption_stage_twopass(cpi))
@@ -169,9 +170,73 @@ int av1_compute_q_from_energy_level_deltaq_mode(const AV1_COMP *const cpi,
   }
   return base_qindex + qindex_delta;
 }
+
+// Comparer used by qsort() to order an array of unsigned int from smallest to
+// largest.
+static int comp_unsigned_int(const void *a, const void *b) {
+  unsigned int arg1 = *(const unsigned int *)a;
+  unsigned int arg2 = *(const unsigned int *)b;
+
+  return (arg1 > arg2) - (arg1 < arg2);
+}
+
+unsigned int av1_get_block_variance_boost(const AV1_COMP *cpi,
+                                          const MACROBLOCK *x) {
+#define SUBBLOCKS_IN_SB_DIM 8
+#define SUBBLOCKS_IN_SB 64
+#define SUBBLOCK_SIZE 8
+  DECLARE_ALIGNED(16, static const uint16_t,
+                  av1_highbd_all_zeros[MAX_SB_SIZE]) = { 0 };
+  DECLARE_ALIGNED(16, static const uint8_t, av1_all_zeros[MAX_SB_SIZE]) = { 0 };
+
+  const MACROBLOCKD *xd = &x->e_mbd;
+  unsigned int sse;
+  // Octile is currently hard-coded and optimized for still pictures. In the
+  // future, we might want to expose this as a parameter that can be fine-tuned
+  // by the caller.
+  // An octile of 5 was chosen because it was found to strike the best balance
+  // between quality and consistency. Lower octiles tend to score lower in
+  // SSIMU2, while higher octiles tend to harm subjective quality consistency,
+  // especially in <1 MP images.
+  const int octile = 5;
+  unsigned int variances[SUBBLOCKS_IN_SB];
+
+  // TODO: bug https://crbug.com/aomedia/375221136 - the current implementation
+  // truncates variances to integers during normalization, similar to SVT-AV1's
+  // counterpart. A possible improvement would be to use rounding: `(n + 32) /
+  // 64`, or just return variances as doubles.
+  aom_variance_fn_t vf = cpi->ppi->fn_ptr[BLOCK_8X8].vf;
+  for (int subb_i = 0; subb_i < SUBBLOCKS_IN_SB_DIM; subb_i++) {
+    int i = subb_i * SUBBLOCK_SIZE;
+    for (int subb_j = 0; subb_j < SUBBLOCKS_IN_SB_DIM; subb_j++) {
+      int j = subb_j * SUBBLOCK_SIZE;
+      if (is_cur_buf_hbd(xd)) {
+        variances[subb_i * SUBBLOCKS_IN_SB_DIM + subb_j] =
+            vf(x->plane[0].src.buf + i * x->plane[0].src.stride + j,
+               x->plane[0].src.stride, CONVERT_TO_BYTEPTR(av1_highbd_all_zeros),
+               0, &sse) /
+            64;
+      } else {
+        variances[subb_i * SUBBLOCKS_IN_SB_DIM + subb_j] =
+            vf(x->plane[0].src.buf + i * x->plane[0].src.stride + j,
+               x->plane[0].src.stride, av1_all_zeros, 0, &sse) /
+            64;
+      }
+    }
+  }
+
+  // Order the 8x8 SB values from smallest to largest variance.
+  qsort(variances, SUBBLOCKS_IN_SB, sizeof(unsigned int), comp_unsigned_int);
+
+  // Take the 8x8 variance value in the specified octile.
+  assert(octile >= 1 && octile <= 8);
+  const unsigned int variance = variances[octile * (SUBBLOCKS_IN_SB / 8) - 1];
+
+  return variance;
+}
 #endif  // !CONFIG_REALTIME_ONLY
 
-int av1_log_block_var(const AV1_COMP *cpi, MACROBLOCK *x, BLOCK_SIZE bs) {
+int av1_log_block_var(const AV1_COMP *cpi, const MACROBLOCK *x, BLOCK_SIZE bs) {
   DECLARE_ALIGNED(16, static const uint16_t,
                   av1_highbd_all_zeros[MAX_SB_SIZE]) = { 0 };
   DECLARE_ALIGNED(16, static const uint8_t, av1_all_zeros[MAX_SB_SIZE]) = { 0 };
@@ -185,7 +250,7 @@ int av1_log_block_var(const AV1_COMP *cpi, MACROBLOCK *x, BLOCK_SIZE bs) {
   // subblock has a low variance.   This allows us to assign the same segment
   // number for the same sorts of area regardless of how the partitioning goes.
 
-  MACROBLOCKD *xd = &x->e_mbd;
+  const MACROBLOCKD *xd = &x->e_mbd;
   double var = 0;
   unsigned int sse;
   int i, j;
@@ -198,18 +263,17 @@ int av1_log_block_var(const AV1_COMP *cpi, MACROBLOCK *x, BLOCK_SIZE bs) {
   const int bw = MI_SIZE * mi_size_wide[bs] - right_overflow;
   const int bh = MI_SIZE * mi_size_high[bs] - bottom_overflow;
 
+  aom_variance_fn_t vf = cpi->ppi->fn_ptr[BLOCK_4X4].vf;
   for (i = 0; i < bh; i += 4) {
     for (j = 0; j < bw; j += 4) {
       if (is_cur_buf_hbd(xd)) {
-        var += log1p(cpi->ppi->fn_ptr[BLOCK_4X4].vf(
-                         x->plane[0].src.buf + i * x->plane[0].src.stride + j,
-                         x->plane[0].src.stride,
-                         CONVERT_TO_BYTEPTR(av1_highbd_all_zeros), 0, &sse) /
+        var += log1p(vf(x->plane[0].src.buf + i * x->plane[0].src.stride + j,
+                        x->plane[0].src.stride,
+                        CONVERT_TO_BYTEPTR(av1_highbd_all_zeros), 0, &sse) /
                      16.0);
       } else {
-        var += log1p(cpi->ppi->fn_ptr[BLOCK_4X4].vf(
-                         x->plane[0].src.buf + i * x->plane[0].src.stride + j,
-                         x->plane[0].src.stride, av1_all_zeros, 0, &sse) /
+        var += log1p(vf(x->plane[0].src.buf + i * x->plane[0].src.stride + j,
+                        x->plane[0].src.stride, av1_all_zeros, 0, &sse) /
                      16.0);
       }
     }

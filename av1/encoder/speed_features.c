@@ -1464,7 +1464,7 @@ static void set_rt_speed_feature_framesize_dependent(const AV1_COMP *const cpi,
     if (is_360p_or_larger) {
       sf->part_sf.fixed_partition_size = BLOCK_32X32;
       sf->rt_sf.use_fast_fixed_part = 1;
-      sf->mv_sf.subpel_force_stop = HALF_PEL;
+      sf->rt_sf.reduce_mv_pel_precision_lowcomplex = 2;
     }
     sf->rt_sf.increase_source_sad_thresh = 1;
     sf->rt_sf.part_early_exit_zeromv = 2;
@@ -1662,10 +1662,6 @@ static void set_rt_speed_feature_framesize_dependent(const AV1_COMP *const cpi,
     sf->rt_sf.use_rtc_tf = 0;
 }
 
-// TODO(kyslov): now this is very similar to
-// set_good_speed_features_framesize_independent
-// except it sets non-rd flag on speed 8. This function will likely
-// be modified in the future with RT-specific speed features.
 static void set_rt_speed_features_framesize_independent(AV1_COMP *cpi,
                                                         SPEED_FEATURES *sf,
                                                         int speed) {

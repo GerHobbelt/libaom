@@ -58,9 +58,9 @@ endif()
 # passed to libtool.
 #
 # We set SO_FILE_VERSION = [c-a].a.r
-set(LT_CURRENT 13)
+set(LT_CURRENT 14)
 set(LT_REVISION 0)
-set(LT_AGE 10)
+set(LT_AGE 11)
 math(EXPR SO_VERSION "${LT_CURRENT} - ${LT_AGE}")
 set(SO_FILE_VERSION "${SO_VERSION}.${LT_AGE}.${LT_REVISION}")
 unset(LT_CURRENT)
@@ -200,7 +200,9 @@ list(APPEND AOM_ENCODER_APP_UTIL_SOURCES
             "${AOM_ROOT}/common/y4minput.c"
             "${AOM_ROOT}/common/y4minput.h"
             "${AOM_ROOT}/examples/encoder_util.h"
-            "${AOM_ROOT}/examples/encoder_util.c")
+            "${AOM_ROOT}/examples/encoder_util.c"
+            "${AOM_ROOT}/examples/multilayer_metadata.h"
+            "${AOM_ROOT}/examples/multilayer_metadata.cc")
 
 list(APPEND AOM_ENCODER_STATS_SOURCES "${AOM_ROOT}/stats/aomstats.c"
             "${AOM_ROOT}/stats/aomstats.h" "${AOM_ROOT}/stats/rate_hist.c"
