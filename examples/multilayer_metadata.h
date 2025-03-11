@@ -15,6 +15,7 @@
 #define AOM_EXAMPLES_MULTILAYER_METADATA_H_
 
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 namespace libaom_examples {
@@ -54,9 +55,9 @@ struct AlphaInformation {
 
 struct DepthRepresentationElement {
   bool sign_flag;
-  uint8_t exponent;  // [0, 126] (biased exponent)
+  uint8_t exponent;      // [0, 126] (biased exponent)
+  uint8_t mantissa_len;  // [1, 32]
   uint32_t mantissa;
-  uint16_t mantissa_len;  // [1, 32]
 };
 
 struct DepthInformation {
