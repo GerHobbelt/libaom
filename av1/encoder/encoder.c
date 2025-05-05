@@ -775,8 +775,9 @@ void av1_change_config_seq(struct AV1_PRIMARY *ppi,
   // Init sequence level coding tools
   // This should not be called after the first key frame.
   // Note that for SVC encoding the sequence parameters
-  // (operating_points_cnt_minus_1, operating_point_idc[]) should be updated
-  // whenever the number of layers is changed. This is done in the
+  // (operating_points_cnt_minus_1, operating_point_idc[],
+  // has_nonzero_operating_point_idc) should be updated whenever the
+  // number of layers is changed. This is done in the
   // ctrl_set_svc_params().
   if (!ppi->seq_params_locked) {
     seq_params->operating_points_cnt_minus_1 =
@@ -2997,10 +2998,6 @@ static int encode_with_recode_loop(AV1_COMP *cpi, size_t *size, uint8_t *dest,
                        cm->seq_params->bit_depth, cpi->oxcf.algo_cfg.sharpness);
 
     av1_set_variance_partition_thresholds(cpi, q, 0);
-
-    // printf("Frame %d/%d: q = %d, frame_type = %d superres_denom = %d\n",
-    //        cm->current_frame.frame_number, cm->show_frame, q,
-    //        cm->current_frame.frame_type, cm->superres_scale_denominator);
 
     if (loop_count == 0) {
       av1_setup_frame(cpi);
