@@ -590,6 +590,33 @@ static void set_allintra_speed_features_framesize_independent(
     sf->intra_sf.chroma_intra_pruning_with_hog = 0;
 }
 
+// Configures framesize dependent speed features for low complexity decoding.
+static void set_good_speed_features_lc_dec_framesize_dependent(
+    const AV1_COMP *const cpi, SPEED_FEATURES *const sf, int speed) {
+  if (speed < 1 || speed > 3) return;
+
+  const AV1_COMMON *const cm = &cpi->common;
+  const int is_608p_or_larger = AOMMIN(cm->width, cm->height) >= 608;
+  const FRAME_UPDATE_TYPE update_type =
+      get_frame_update_type(&cpi->ppi->gf_group, cpi->gf_frame_index);
+
+  if (is_608p_or_larger) {
+    sf->lpf_sf.skip_loop_filter_using_filt_error =
+        (update_type != OVERLAY_UPDATE && update_type != INTNL_OVERLAY_UPDATE &&
+         cpi->common.current_frame.pyramid_level > 1)
+            ? 1
+            : 0;
+  }
+
+  const int short_dimension = AOMMIN(cm->width, cm->height);
+  if (short_dimension > 480 && short_dimension < 720) {
+    const int leaf_and_overlay_frames =
+        (update_type == LF_UPDATE || update_type == OVERLAY_UPDATE ||
+         update_type == INTNL_OVERLAY_UPDATE);
+    if (leaf_and_overlay_frames) sf->gm_sf.gm_search_type = GM_DISABLE_SEARCH;
+  }
+}
+
 static void set_good_speed_feature_framesize_dependent(
     const AV1_COMP *const cpi, SPEED_FEATURES *const sf, int speed) {
   const AV1_COMMON *const cm = &cpi->common;
@@ -915,11 +942,14 @@ static void set_good_speed_feature_framesize_dependent(
 
     sf->hl_sf.recode_tolerance = 55;
   }
+
+  if (cpi->oxcf.enable_low_complexity_decode)
+    set_good_speed_features_lc_dec_framesize_dependent(cpi, sf, speed);
 }
 
-// Configures speed features for low complexity decoding.
-static void set_speed_features_low_complexity_decode(const AV1_COMP *const cpi,
-                                                     SPEED_FEATURES *const sf) {
+// Configures framesize independent speed features for low complexity decoding.
+static void set_good_speed_features_lc_dec_framesize_independent(
+    const AV1_COMP *const cpi, SPEED_FEATURES *const sf) {
   const FRAME_UPDATE_TYPE update_type =
       get_frame_update_type(&cpi->ppi->gf_group, cpi->gf_frame_index);
 
@@ -1332,7 +1362,7 @@ static void set_good_speed_features_framesize_independent(
   }
 
   if (cpi->oxcf.enable_low_complexity_decode)
-    set_speed_features_low_complexity_decode(cpi, sf);
+    set_good_speed_features_lc_dec_framesize_independent(cpi, sf);
 }
 
 static void set_rt_speed_feature_framesize_dependent(const AV1_COMP *const cpi,
@@ -2265,6 +2295,7 @@ static inline void init_lpf_sf(LOOP_FILTER_SPEED_FEATURES *lpf_sf) {
   lpf_sf->enable_sgr_ep_pruning = 0;
   lpf_sf->reduce_wiener_window_size = 0;
   lpf_sf->adaptive_luma_loop_filter_skip = 0;
+  lpf_sf->skip_loop_filter_using_filt_error = 0;
   lpf_sf->lpf_pick = LPF_PICK_FROM_FULL_IMAGE;
   lpf_sf->use_coarse_filter_level_search = 0;
   lpf_sf->cdef_pick_method = CDEF_FULL_SEARCH;
