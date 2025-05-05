@@ -607,6 +607,77 @@ void av1_get_horver_correlation_full_c(const int16_t *diff, int stride,
   }
 }
 
+static void get_variance_stats(const AV1_COMP *cpi, const MACROBLOCK *x,
+                               int num_planes, int64_t *src_var,
+                               int64_t *rec_var) {
+  const MACROBLOCKD *xd = &x->e_mbd;
+  const MB_MODE_INFO *mbmi = xd->mi[0];
+
+  DECLARE_ALIGNED(16, uint8_t, dclevel[MAX_SB_SQUARE]);
+  memset(dclevel, 128, sizeof(dclevel));
+  int dclevel_stride = block_size_wide[mbmi->bsize];
+
+  *src_var = 0;
+  *rec_var = 0;
+
+  for (int plane = 0; plane < num_planes; ++plane) {
+    if (plane && !xd->is_chroma_ref) break;
+
+    const struct macroblock_plane *const p = &x->plane[plane];
+    const struct macroblockd_plane *const pd = &xd->plane[plane];
+    const BLOCK_SIZE bs =
+        get_plane_block_size(mbmi->bsize, pd->subsampling_x, pd->subsampling_y);
+    unsigned int sse;
+
+    int64_t var = cpi->ppi->fn_ptr[bs].vf(p->src.buf, p->src.stride, dclevel,
+                                          dclevel_stride, &sse);
+
+    *src_var += var;
+
+    var = cpi->ppi->fn_ptr[bs].vf(pd->dst.buf, pd->dst.stride, dclevel,
+                                  dclevel_stride, &sse);
+
+    *rec_var += var;
+  }
+
+  *src_var <<= 4;
+  *rec_var <<= 4;
+}
+
+static void adjust_rdcost(const AV1_COMP *cpi, const MACROBLOCK *x,
+                          RD_STATS *rd_cost) {
+  if (cpi->oxcf.algo_cfg.sharpness != 3) return;
+
+  if (frame_is_kf_gf_arf(cpi)) return;
+
+  int64_t src_var, rec_var;
+  get_variance_stats(cpi, x, 1, &src_var, &rec_var);
+
+  if (src_var <= rec_var) return;
+
+  int64_t var_offset = src_var - rec_var;
+
+  rd_cost->dist += var_offset;
+
+  rd_cost->rdcost = RDCOST(x->rdmult, rd_cost->rate, rd_cost->dist);
+}
+
+static void adjust_cost(const AV1_COMP *cpi, const MACROBLOCK *x,
+                        int64_t *rd_cost) {
+  if (cpi->oxcf.algo_cfg.sharpness != 3) return;
+
+  if (frame_is_kf_gf_arf(cpi)) return;
+
+  int64_t src_var, rec_var;
+  get_variance_stats(cpi, x, 1, &src_var, &rec_var);
+
+  if (src_var <= rec_var) return;
+
+  int64_t var_offset = src_var - rec_var;
+
+  *rd_cost += RDCOST(x->rdmult, 0, var_offset);
+}
+
 static int64_t get_sse(const AV1_COMP *cpi, const MACROBLOCK *x,
                        int64_t *sse_y) {
   const AV1_COMMON *cm = &cpi->common;
@@ -1351,6 +1422,11 @@ static int64_t motion_mode_rd(
       assert(mbmi->ref_frame[1] != INTRA_FRAME);
     }
 
+    if (cpi->oxcf.algo_cfg.sharpness == 3 &&
+        (mbmi->motion_mode == OBMC_CAUSAL ||
+         mbmi->motion_mode == WARPED_CAUSAL))
+      continue;
+
     // Do not search OBMC if the probability of selecting it is below a
     // predetermined threshold for this update_type and block size.
     const FRAME_UPDATE_TYPE update_type =
@@ -1596,6 +1672,10 @@ static int64_t motion_mode_rd(
             av1_broadcast_interp_filter(av1_unswitchable_filter(interp_filter));
       }
     }
+
+    adjust_cost(cpi, x, &this_yrd);
+    adjust_rdcost(cpi, x, rd_stats);
+    adjust_rdcost(cpi, x, rd_stats_y);
 
     const int64_t tmp_rd = RDCOST(x->rdmult, rd_stats->rate, rd_stats->dist);
     if (mode_index == 0) {
@@ -3646,8 +3726,11 @@ static inline void refine_winner_mode_tx(
         av1_init_rd_stats(&rd_stats_uv);
       }
 
+      const int comp_pred = mbmi->ref_frame[1] > INTRA_FRAME;
+
       const ModeCosts *mode_costs = &x->mode_costs;
       if (is_inter_mode(mbmi->mode) &&
+          (!cpi->oxcf.algo_cfg.sharpness || !comp_pred) &&
           RDCOST(x->rdmult,
                  mode_costs->skip_txfm_cost[skip_ctx][0] + rd_stats_y.rate +
                      rd_stats_uv.rate,
@@ -5279,6 +5362,10 @@ static void tx_search_best_inter_candidates(
                 mode_costs->skip_txfm_cost[skip_ctx][mbmi->skip_txfm]);
       }
     }
+
+    if (cpi->oxcf.algo_cfg.sharpness == 3 && is_comp_pred && rd_stats.skip_txfm)
+      continue;
+
     rd_stats.rdcost = RDCOST(x->rdmult, rd_stats.rate, rd_stats.dist);
     if (rd_stats.rdcost < best_rd_in_this_partition) {
       best_rd_in_this_partition = rd_stats.rdcost;
@@ -5501,6 +5588,11 @@ static inline void search_intra_modes_in_interframe(
         intra_search_state, cpi, x, bsize, intra_ref_frame_cost, ctx,
         &intra_rd_stats_y, search_state->best_rd, &mode_cost_y, &intra_rd_y,
         &best_model_rd, top_intra_model_rd);
+
+    if (intra_rd_y < INT64_MAX) {
+      adjust_cost(cpi, x, &intra_rd_y);
+    }
+
     if (is_luma_result_valid && intra_rd_y < yrd_threshold) {
       is_best_y_mode_intra = 1;
       if (intra_rd_y < best_rd_y) {
@@ -5585,6 +5677,8 @@ static inline void search_intra_modes_in_interframe(
   }
 
   intra_rd_stats.rdcost = this_rd;
+
+  adjust_rdcost(cpi, x, &intra_rd_stats);
 
   // Collect mode stats for multiwinner mode processing
   const int txfm_search_done = 1;
@@ -6019,6 +6113,12 @@ void av1_rd_pick_inter_mode(struct AV1_COMP *cpi, struct TileDataEnc *tile_data,
     args.best_pred_sse = search_state.best_pred_sse;
     args.skip_ifs = skip_interp_filter_search(cpi, is_single_pred);
 
+    if (!frame_is_kf_gf_arf(cpi) && cpi->oxcf.algo_cfg.sharpness == 3) {
+      if (ref_frame != ALTREF_FRAME && ref_frame != GOLDEN_FRAME &&
+          ref_frame != INTRA_FRAME)
+        continue;
+    }
+
     int64_t skip_rd[2] = { search_state.best_skip_rd[0],
                            search_state.best_skip_rd[1] };
     int64_t this_yrd = INT64_MAX;
@@ -6052,10 +6152,16 @@ void av1_rd_pick_inter_mode(struct AV1_COMP *cpi, struct TileDataEnc *tile_data,
       rd_stats_uv.rate = 0;
     }
 
+    if (comp_pred && mbmi->skip_txfm && cpi->oxcf.algo_cfg.sharpness == 3)
+      continue;
+
     if (sf->inter_sf.prune_compound_using_single_ref && is_single_pred &&
         this_rd < ref_frame_rd[ref_frame]) {
       ref_frame_rd[ref_frame] = this_rd;
     }
+
+    adjust_cost(cpi, x, &this_rd);
+    adjust_rdcost(cpi, x, &rd_stats);
 
     // Did this mode help, i.e., is it the new best mode
     if (this_rd < search_state.best_rd) {
@@ -6182,7 +6288,7 @@ void av1_rd_pick_inter_mode(struct AV1_COMP *cpi, struct TileDataEnc *tile_data,
 
   search_state.best_mbmode.skip_mode = 0;
   if (cm->current_frame.skip_mode_info.skip_mode_flag &&
-      is_comp_ref_allowed(bsize)) {
+      cpi->oxcf.algo_cfg.sharpness != 3 && is_comp_ref_allowed(bsize)) {
     const struct segmentation *const seg = &cm->seg;
     unsigned char segment_id = mbmi->segment_id;
     if (!segfeature_active(seg, segment_id, SEG_LVL_REF_FRAME)) {
