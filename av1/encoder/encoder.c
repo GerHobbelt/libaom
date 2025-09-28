@@ -2097,8 +2097,7 @@ static void estimate_screen_content(AV1_COMP *cpi, FeatureFlags *features) {
  */
 uint8_t av1_find_dominant_value(const uint8_t *src, int stride, int rows,
                                 int cols) {
-  uint32_t value_count[1 << 8];  // Maximum (1 << 8) value levels.
-  memset(value_count, 0, sizeof(value_count));
+  uint32_t value_count[1 << 8] = { 0 };  // Maximum (1 << 8) value levels.
   uint32_t dominant_value_count = 0;
   uint8_t dominant_value = 0;
 
@@ -2216,6 +2215,8 @@ static void estimate_screen_content_antialiasing_aware(AV1_COMP *cpi,
     kBlockArea = kBlockWidth * kBlockHeight
   };
 
+  const bool fast_detection =
+      cpi->sf.hl_sf.screen_detection_mode2_fast_detection;
   const AV1_COMMON *const cm = &cpi->common;
   const MACROBLOCKD *const xd = &cpi->td.mb.e_mbd;
   const uint8_t *src = cpi->unfiltered_source->y_buffer;
@@ -2256,23 +2257,35 @@ static void estimate_screen_content_antialiasing_aware(AV1_COMP *cpi,
 
   fprintf(stats_file, "\n");
   fprintf(stats_file, "Screen detection mode 2 image map legend\n");
+  if (fast_detection) {
+    fprintf(stats_file, "Fast detection enabled\n");
+  }
   fprintf(stats_file,
-          "---------------------------------------------------------------\n");
+          "-------------------------------------------------------\n");
   fprintf(stats_file,
-          "S: simple SCR block, high var    C: complex SCR block, high var\n");
+          "S: simple block, high var    C: complex block, high var\n");
   fprintf(stats_file,
-          "-: simple SCR block, low var     =: complex SCR block, low var \n");
+          "-: simple block, low var     =: complex block, low var \n");
   fprintf(stats_file,
-          "x: photo-like block              .: non-palettizable block     \n");
+          "x: photo-like block          .: non-palettizable block \n");
   fprintf(stats_file,
-          "(whitespace): solid block                                      \n");
+          "(whitespace): solid block                              \n");
   fprintf(stats_file,
-          "---------------------------------------------------------------\n");
+          "-------------------------------------------------------\n");
 #endif
 
+  // Skip every other block and weigh each block twice as much when performing
+  // fast detection
+  const int multiplier = fast_detection ? 2 : 1;
+
   for (int r = 0; r + kBlockHeight <= height; r += kBlockHeight) {
-    for (int c = 0; c + kBlockWidth <= width; c += kBlockWidth) {
-      int count_buf[1 << 8];
+    // Alternate skipping in a "checkerboard" pattern when performing fast
+    // detection
+    const int initial_col =
+        (fast_detection && (r / kBlockHeight) % 2) ? kBlockWidth : 0;
+
+    for (int c = initial_col; c + kBlockWidth <= width;
+         c += kBlockWidth * multiplier) {
       const uint8_t *blk_src = src + r * (ptrdiff_t)stride + c;
       const uint8_t *blk = blk_src;
       int blk_stride = stride;
@@ -2299,11 +2312,10 @@ static void estimate_screen_content_antialiasing_aware(AV1_COMP *cpi,
 
       // First, find if the block could be palettized
       int number_of_colors;
-      av1_count_colors(blk, blk_stride, /*rows=*/kBlockHeight,
-                       /*cols=*/kBlockWidth, count_buf, &number_of_colors);
-
-      if (number_of_colors > 1 &&
-          number_of_colors <= kComplexInitialColorThresh) {
+      bool under_threshold = av1_count_colors_with_threshold(
+          blk, blk_stride, /*rows=*/kBlockHeight,
+          /*cols=*/kBlockWidth, kComplexInitialColorThresh, &number_of_colors);
+      if (number_of_colors > 1 && under_threshold) {
         struct buf_2d buf;
         buf.stride = stride;
         buf.buf = (uint8_t *)blk_src;
@@ -2330,18 +2342,19 @@ static void estimate_screen_content_antialiasing_aware(AV1_COMP *cpi,
           // from final palette count
           av1_dilate_block(blk, blk_stride, dilated_blk, kBlockWidth,
                            /*rows=*/kBlockHeight, /*cols=*/kBlockWidth);
-          av1_count_colors(dilated_blk, kBlockWidth, /*rows=*/kBlockHeight,
-                           /*cols=*/kBlockWidth, count_buf, &number_of_colors);
+          under_threshold = av1_count_colors_with_threshold(
+              dilated_blk, kBlockWidth, /*rows=*/kBlockHeight,
+              /*cols=*/kBlockWidth, kComplexFinalColorThresh,
+              &number_of_colors);
 
-          if (number_of_colors <= kComplexFinalColorThresh) {
-            ++count_palette;
-
+          if (under_threshold) {
             // Variance always comes from the source image with no
             // down-conversion
             int var = av1_get_perpixel_variance(cpi, xd, &buf, BLOCK_16X16,
                                                 AOM_PLANE_Y, use_hbd);
 
             if (var > kVarThresh) {
+              ++count_palette;
               ++count_intrabc;
 #ifdef OUTPUT_SCR_DET_MODE2_STATS
               fprintf(stats_file, "C");
@@ -2369,6 +2382,13 @@ static void estimate_screen_content_antialiasing_aware(AV1_COMP *cpi,
 #ifdef OUTPUT_SCR_DET_MODE2_STATS
     fprintf(stats_file, "\n");
 #endif
+  }
+
+  // Normalize counts to account for the blocks that were skipped
+  if (fast_detection) {
+    count_photo *= multiplier;
+    count_palette *= multiplier;
+    count_intrabc *= multiplier;
   }
 
   // The threshold values are selected experimentally.

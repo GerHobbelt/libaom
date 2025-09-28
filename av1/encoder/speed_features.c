@@ -206,13 +206,15 @@ static void set_allintra_speed_feature_framesize_dependent(
 
   // TODO(huisu@google.com): train models for 720P and above.
   if (!is_720p_or_larger) {
-    sf->part_sf.ml_partition_search_breakout_thresh[0] = 200;  // BLOCK_8X8
-    sf->part_sf.ml_partition_search_breakout_thresh[1] = 250;  // BLOCK_16X16
-    sf->part_sf.ml_partition_search_breakout_thresh[2] = 300;  // BLOCK_32X32
-    sf->part_sf.ml_partition_search_breakout_thresh[3] = 500;  // BLOCK_64X64
-    sf->part_sf.ml_partition_search_breakout_thresh[4] = -1;   // BLOCK_128X128
+    sf->part_sf.ml_partition_search_breakout_thresh[0] = -1.0f;
+    sf->part_sf.ml_partition_search_breakout_thresh[1] = 0.993307f;
+    sf->part_sf.ml_partition_search_breakout_thresh[2] = 0.952574f;
+    sf->part_sf.ml_partition_search_breakout_thresh[3] = 0.924142f;
+    sf->part_sf.ml_partition_search_breakout_thresh[4] = 0.880797f;
     sf->part_sf.ml_early_term_after_part_split_level = 1;
   }
+
+  sf->part_sf.ml_partition_search_breakout_model_index = 0;
 
   if (is_720p_or_larger) {
     // TODO(chiyotsai@google.com): make this speed feature adaptive based on
@@ -229,12 +231,20 @@ static void set_allintra_speed_feature_framesize_dependent(
       sf->part_sf.use_square_partition_only_threshold = BLOCK_32X32;
     }
 
-    if (!is_720p_or_larger) {
-      sf->part_sf.ml_partition_search_breakout_thresh[0] = 200;  // BLOCK_8X8
-      sf->part_sf.ml_partition_search_breakout_thresh[1] = 250;  // BLOCK_16X16
-      sf->part_sf.ml_partition_search_breakout_thresh[2] = 300;  // BLOCK_32X32
-      sf->part_sf.ml_partition_search_breakout_thresh[3] = 300;  // BLOCK_64X64
-      sf->part_sf.ml_partition_search_breakout_thresh[4] = -1;  // BLOCK_128X128
+    if (is_720p_or_larger) {
+      sf->part_sf.ml_partition_search_breakout_thresh[0] = 0.9999999f;
+      sf->part_sf.ml_partition_search_breakout_thresh[1] = 0.9999999f;
+      sf->part_sf.ml_partition_search_breakout_thresh[2] = 0.9618367258814811f;
+      sf->part_sf.ml_partition_search_breakout_thresh[3] = 0.9990705139233304f;
+      sf->part_sf.ml_partition_search_breakout_thresh[4] = 0.9648891196441841f;
+
+      sf->part_sf.ml_partition_search_breakout_model_index = 1;
+    } else {
+      sf->part_sf.ml_partition_search_breakout_thresh[0] = -1.0f;
+      sf->part_sf.ml_partition_search_breakout_thresh[1] = 0.952574f;
+      sf->part_sf.ml_partition_search_breakout_thresh[2] = 0.952574f;
+      sf->part_sf.ml_partition_search_breakout_thresh[3] = 0.924142f;
+      sf->part_sf.ml_partition_search_breakout_thresh[4] = 0.880797f;
     }
     sf->part_sf.ml_early_term_after_part_split_level = 2;
   }
@@ -246,6 +256,15 @@ static void set_allintra_speed_feature_framesize_dependent(
       sf->part_sf.use_square_partition_only_threshold = BLOCK_32X32;
     } else {
       sf->part_sf.use_square_partition_only_threshold = BLOCK_32X32;
+    }
+
+    if (is_720p_or_larger) {
+      sf->part_sf.ml_partition_search_breakout_thresh[0] = 0.9583713938680828f;
+      sf->part_sf.ml_partition_search_breakout_thresh[1] = 0.9999999f;
+      sf->part_sf.ml_partition_search_breakout_thresh[2] = 0.9634239069901543f;
+      sf->part_sf.ml_partition_search_breakout_thresh[3] = 0.9000000000000001f;
+      sf->part_sf.ml_partition_search_breakout_thresh[4] = 0.9196596355880025f;
+      sf->part_sf.ml_partition_search_breakout_model_index = 1;
     }
 
     if (is_720p_or_larger) {
@@ -266,6 +285,14 @@ static void set_allintra_speed_feature_framesize_dependent(
 
   if (speed >= 3) {
     sf->part_sf.ml_early_term_after_part_split_level = 0;
+
+    if (is_720p_or_larger) {
+      for (int i = 0; i < PARTITION_BLOCK_SIZES; ++i) {
+        sf->part_sf.ml_partition_search_breakout_thresh[i] =
+            -1;  // -1 means not enabled.
+      }
+      sf->part_sf.ml_partition_search_breakout_model_index = 0;
+    }
 
     if (is_720p_or_larger) {
       sf->part_sf.partition_search_breakout_dist_thr = (1 << 25);
@@ -374,6 +401,8 @@ static void set_allintra_speed_features_framesize_independent(
   if (speed >= 1) {
     sf->part_sf.intra_cnn_based_part_prune_level =
         allow_screen_content_tools ? 0 : 2;
+    sf->part_sf.simple_motion_search_prune_agg =
+        allow_screen_content_tools ? NO_PRUNING : SIMPLE_AGG_LVL1;
     sf->part_sf.simple_motion_search_early_term_none = 1;
     // TODO(Venkat): Clean-up frame type dependency for
     // simple_motion_search_split in partition search function and set the
@@ -410,6 +439,8 @@ static void set_allintra_speed_features_framesize_independent(
   if (speed >= 2) {
     sf->mv_sf.auto_mv_step_size = 1;
 
+    sf->part_sf.simple_motion_search_prune_agg =
+        allow_screen_content_tools ? NO_PRUNING : SIMPLE_AGG_LVL2;
     sf->intra_sf.disable_smooth_intra = 1;
     sf->intra_sf.intra_pruning_with_hog = 2;
     sf->intra_sf.prune_filter_intra_level = 1;
@@ -423,9 +454,10 @@ static void set_allintra_speed_features_framesize_independent(
   if (speed >= 3) {
     sf->hl_sf.high_precision_mv_usage = CURRENT_Q;
     sf->hl_sf.recode_loop = ALLOW_RECODE_KFARFGF;
+    sf->hl_sf.screen_detection_mode2_fast_detection = 1;
 
     sf->part_sf.less_rectangular_check_level = 2;
-    sf->part_sf.simple_motion_search_prune_agg = SIMPLE_AGG_LVL1;
+    sf->part_sf.simple_motion_search_prune_agg = SIMPLE_AGG_LVL3;
     sf->part_sf.prune_ext_part_using_split_info = 1;
 
     sf->mv_sf.full_pixel_search_level = 1;
@@ -454,7 +486,7 @@ static void set_allintra_speed_features_framesize_independent(
   if (speed >= 4) {
     sf->mv_sf.subpel_search_method = SUBPEL_TREE_PRUNED_MORE;
 
-    sf->part_sf.simple_motion_search_prune_agg = SIMPLE_AGG_LVL2;
+    sf->part_sf.simple_motion_search_prune_agg = SIMPLE_AGG_LVL4;
     sf->part_sf.simple_motion_search_reduce_search_steps = 4;
     sf->part_sf.prune_ext_part_using_split_info = 2;
     sf->part_sf.early_term_after_none_split = 1;
@@ -489,7 +521,7 @@ static void set_allintra_speed_features_framesize_independent(
   }
 
   if (speed >= 5) {
-    sf->part_sf.simple_motion_search_prune_agg = SIMPLE_AGG_LVL3;
+    sf->part_sf.simple_motion_search_prune_agg = SIMPLE_AGG_LVL5;
     sf->part_sf.ext_partition_eval_thresh =
         allow_screen_content_tools ? BLOCK_8X8 : BLOCK_16X16;
     sf->part_sf.intra_cnn_based_part_prune_level =
@@ -605,8 +637,8 @@ static void set_good_speed_features_lc_dec_framesize_dependent(
 
   const AV1_COMMON *const cm = &cpi->common;
   const bool is_720p_or_larger = AOMMIN(cm->width, cm->height) >= 720;
-  const bool is_between_480p_and_720p = AOMMIN(cm->width, cm->height) > 480 &&
-                                        AOMMIN(cm->width, cm->height) < 720;
+  const bool is_between_480p_and_1080p = AOMMIN(cm->width, cm->height) > 480 &&
+                                         AOMMIN(cm->width, cm->height) < 1080;
   const bool is_vertical_video = cm->width < cm->height;
 
   const FRAME_UPDATE_TYPE update_type =
@@ -615,7 +647,7 @@ static void set_good_speed_features_lc_dec_framesize_dependent(
   const int is_key_frame = frame_is_intra_only(cm);
 
   // Speed features for vertical videos
-  if (is_vertical_video && is_between_480p_and_720p) {
+  if (is_vertical_video && is_between_480p_and_1080p) {
     const int leaf_and_overlay_frames =
         (update_type == LF_UPDATE || update_type == OVERLAY_UPDATE ||
          update_type == INTNL_OVERLAY_UPDATE);
@@ -716,13 +748,15 @@ static void set_good_speed_feature_framesize_dependent(
 
   // TODO(huisu@google.com): train models for 720P and above.
   if (!is_720p_or_larger) {
-    sf->part_sf.ml_partition_search_breakout_thresh[0] = 200;  // BLOCK_8X8
-    sf->part_sf.ml_partition_search_breakout_thresh[1] = 250;  // BLOCK_16X16
-    sf->part_sf.ml_partition_search_breakout_thresh[2] = 300;  // BLOCK_32X32
-    sf->part_sf.ml_partition_search_breakout_thresh[3] = 500;  // BLOCK_64X64
-    sf->part_sf.ml_partition_search_breakout_thresh[4] = -1;   // BLOCK_128X128
+    sf->part_sf.ml_partition_search_breakout_thresh[0] = -1.0f;
+    sf->part_sf.ml_partition_search_breakout_thresh[1] = 0.993307f;
+    sf->part_sf.ml_partition_search_breakout_thresh[2] = 0.952574f;
+    sf->part_sf.ml_partition_search_breakout_thresh[3] = 0.924142f;
+    sf->part_sf.ml_partition_search_breakout_thresh[4] = 0.880797f;
     sf->part_sf.ml_early_term_after_part_split_level = 1;
   }
+
+  sf->part_sf.ml_partition_search_breakout_model_index = 0;
 
   if (is_720p_or_larger) {
     // TODO(chiyotsai@google.com): make this speed feature adaptive based on
@@ -748,12 +782,19 @@ static void set_good_speed_feature_framesize_dependent(
       sf->part_sf.use_square_partition_only_threshold = BLOCK_32X32;
     }
 
-    if (!is_720p_or_larger) {
-      sf->part_sf.ml_partition_search_breakout_thresh[0] = 200;  // BLOCK_8X8
-      sf->part_sf.ml_partition_search_breakout_thresh[1] = 250;  // BLOCK_16X16
-      sf->part_sf.ml_partition_search_breakout_thresh[2] = 300;  // BLOCK_32X32
-      sf->part_sf.ml_partition_search_breakout_thresh[3] = 300;  // BLOCK_64X64
-      sf->part_sf.ml_partition_search_breakout_thresh[4] = -1;  // BLOCK_128X128
+    if (is_720p_or_larger) {
+      sf->part_sf.ml_partition_search_breakout_thresh[0] = 0.9999999f;
+      sf->part_sf.ml_partition_search_breakout_thresh[1] = 0.9999999f;
+      sf->part_sf.ml_partition_search_breakout_thresh[2] = 0.9618367258814811f;
+      sf->part_sf.ml_partition_search_breakout_thresh[3] = 0.9990705139233304f;
+      sf->part_sf.ml_partition_search_breakout_thresh[4] = 0.9648891196441841f;
+      sf->part_sf.ml_partition_search_breakout_model_index = 1;
+    } else {
+      sf->part_sf.ml_partition_search_breakout_thresh[0] = -1.0f;
+      sf->part_sf.ml_partition_search_breakout_thresh[1] = 0.952574f;
+      sf->part_sf.ml_partition_search_breakout_thresh[2] = 0.952574f;
+      sf->part_sf.ml_partition_search_breakout_thresh[3] = 0.924142f;
+      sf->part_sf.ml_partition_search_breakout_thresh[4] = 0.880797f;
     }
     sf->part_sf.ml_early_term_after_part_split_level = 2;
 
@@ -767,6 +808,15 @@ static void set_good_speed_feature_framesize_dependent(
       sf->part_sf.use_square_partition_only_threshold = BLOCK_32X32;
     } else {
       sf->part_sf.use_square_partition_only_threshold = BLOCK_32X32;
+    }
+
+    if (is_720p_or_larger) {
+      sf->part_sf.ml_partition_search_breakout_thresh[0] = 0.9583713938680828f;
+      sf->part_sf.ml_partition_search_breakout_thresh[1] = 0.9999999f;
+      sf->part_sf.ml_partition_search_breakout_thresh[2] = 0.9634239069901543f;
+      sf->part_sf.ml_partition_search_breakout_thresh[3] = 0.9000000000000001f;
+      sf->part_sf.ml_partition_search_breakout_thresh[4] = 0.9196596355880025f;
+      sf->part_sf.ml_partition_search_breakout_model_index = 1;
     }
 
     if (is_720p_or_larger) {
@@ -833,6 +883,14 @@ static void set_good_speed_feature_framesize_dependent(
         frame_is_intra_only(&cpi->common) ? 0 : 1;
 
     sf->part_sf.ml_early_term_after_part_split_level = 0;
+
+    if (is_720p_or_larger) {
+      for (int i = 0; i < PARTITION_BLOCK_SIZES; ++i) {
+        sf->part_sf.ml_partition_search_breakout_thresh[i] =
+            -1;  // -1 means not enabled.
+      }
+      sf->part_sf.ml_partition_search_breakout_model_index = 0;
+    }
 
     if (is_720p_or_larger) {
       sf->part_sf.partition_search_breakout_dist_thr = (1 << 25);
@@ -1080,6 +1138,9 @@ static void set_good_speed_features_framesize_independent(
 
     sf->part_sf.intra_cnn_based_part_prune_level =
         allow_screen_content_tools ? 0 : 2;
+
+    sf->part_sf.simple_motion_search_prune_agg =
+        allow_screen_content_tools ? NO_PRUNING : SIMPLE_AGG_LVL1;
     sf->part_sf.simple_motion_search_early_term_none = 1;
     // TODO(Venkat): Clean-up frame type dependency for
     // simple_motion_search_split in partition search function and set the
@@ -1131,6 +1192,8 @@ static void set_good_speed_features_framesize_independent(
   if (speed >= 2) {
     sf->hl_sf.recode_loop = ALLOW_RECODE_KFARFGF;
 
+    sf->part_sf.simple_motion_search_prune_agg =
+        allow_screen_content_tools ? NO_PRUNING : SIMPLE_AGG_LVL2;
     sf->fp_sf.skip_motion_search_threshold = 25;
 
     sf->gm_sf.num_refinement_steps = 2;
@@ -1197,7 +1260,7 @@ static void set_good_speed_features_framesize_independent(
     sf->part_sf.simple_motion_search_prune_agg =
         allow_screen_content_tools
             ? SIMPLE_AGG_LVL0
-            : (boosted ? SIMPLE_AGG_LVL1 : QIDX_BASED_AGG_LVL1);
+            : (boosted ? SIMPLE_AGG_LVL3 : QIDX_BASED_AGG_LVL1);
     sf->part_sf.prune_ext_part_using_split_info = 1;
     sf->part_sf.simple_motion_search_rect_split = 1;
 
@@ -1270,7 +1333,7 @@ static void set_good_speed_features_framesize_independent(
     sf->gm_sf.downsample_level = 1;
 
     sf->part_sf.simple_motion_search_prune_agg =
-        allow_screen_content_tools ? SIMPLE_AGG_LVL0 : SIMPLE_AGG_LVL2;
+        allow_screen_content_tools ? SIMPLE_AGG_LVL0 : SIMPLE_AGG_LVL4;
     sf->part_sf.simple_motion_search_reduce_search_steps = 4;
     sf->part_sf.prune_ext_part_using_split_info = 2;
     sf->part_sf.ml_predict_breakout_level = 3;
@@ -1329,7 +1392,7 @@ static void set_good_speed_features_framesize_independent(
     sf->fp_sf.reduce_mv_step_param = 4;
 
     sf->part_sf.simple_motion_search_prune_agg =
-        allow_screen_content_tools ? SIMPLE_AGG_LVL0 : SIMPLE_AGG_LVL3;
+        allow_screen_content_tools ? SIMPLE_AGG_LVL0 : SIMPLE_AGG_LVL5;
     sf->part_sf.ext_partition_eval_thresh =
         allow_screen_content_tools ? BLOCK_8X8 : BLOCK_16X16;
     sf->part_sf.prune_sub_8x8_partition_level =
@@ -2078,6 +2141,7 @@ static inline void init_hl_sf(HIGH_LEVEL_SPEED_FEATURES *hl_sf) {
   hl_sf->weight_calc_level_in_tf = 0;
   hl_sf->allow_sub_blk_me_in_tf = 0;
   hl_sf->ref_frame_mvs_lvl = 0;
+  hl_sf->screen_detection_mode2_fast_detection = 0;
 }
 
 static inline void init_fp_sf(FIRST_PASS_SPEED_FEATURES *fp_sf) {
@@ -2135,6 +2199,7 @@ static inline void init_part_sf(PARTITION_SPEED_FEATURES *part_sf) {
     part_sf->ml_partition_search_breakout_thresh[i] =
         -1;  // -1 means not enabled.
   }
+  part_sf->ml_partition_search_breakout_model_index = 0;
   part_sf->simple_motion_search_prune_agg = SIMPLE_AGG_LVL0;
   part_sf->simple_motion_search_split = 0;
   part_sf->simple_motion_search_prune_rect = 0;
@@ -2677,8 +2742,8 @@ static void set_good_speed_features_lc_dec_qindex_dependent(
   if (speed < 1 || speed > 3) return;
 
   const AV1_COMMON *const cm = &cpi->common;
-  const bool is_between_480p_and_720p = AOMMIN(cm->width, cm->height) > 480 &&
-                                        AOMMIN(cm->width, cm->height) < 720;
+  const bool is_between_480p_and_1080p = AOMMIN(cm->width, cm->height) > 480 &&
+                                         AOMMIN(cm->width, cm->height) < 1080;
   const bool is_720p_or_larger = AOMMIN(cm->width, cm->height) >= 720;
   const bool is_vertical_video = cm->width < cm->height;
   const FRAME_UPDATE_TYPE update_type =
@@ -2688,7 +2753,7 @@ static void set_good_speed_features_lc_dec_qindex_dependent(
        update_type == INTNL_OVERLAY_UPDATE);
 
   // Speed features for vertical videos
-  if (is_vertical_video && is_between_480p_and_720p) {
+  if (is_vertical_video && is_between_480p_and_1080p) {
     sf->lpf_sf.min_lr_unit_size = RESTORATION_UNITSIZE_MAX >> 1;
     sf->lpf_sf.max_lr_unit_size = RESTORATION_UNITSIZE_MAX >> 1;
   }
