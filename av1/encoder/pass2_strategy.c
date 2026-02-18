@@ -2985,6 +2985,7 @@ static int define_kf_interval(AV1_COMP *cpi,
                           : cpi->common.mi_params.MBs;
   const int future_stats_count =
       av1_firstpass_info_future_count(firstpass_info, 0);
+
   while (frames_to_key < future_stats_count &&
          frames_to_key < num_frames_to_detect_scenecut) {
     // Provided that we are not at the end of the file...
@@ -2999,7 +3000,19 @@ static int define_kf_interval(AV1_COMP *cpi,
             oxcf->rc_cfg.mode, cpi->ppi->p_rc.enable_scenecut_detection,
             num_mbs);
         if (scenecut_detected) {
-          break;
+          int test_next_gop = 0;
+
+          for (int idx = 0; idx < 32; ++idx) {
+            const FIRSTPASS_STATS *next_stats =
+                av1_firstpass_info_peek(firstpass_info, frames_to_key + idx);
+
+            if (next_stats == NULL) continue;
+
+            if (next_stats->lt_coded_error * 2.5 < next_stats->coded_error)
+              test_next_gop = 1;
+          }
+
+          if (!test_next_gop) break;
         }
       }
 
@@ -3744,6 +3757,16 @@ void av1_get_second_pass_params(AV1_COMP *cpi,
     return;
   }
 
+  if (cpi->common.current_frame.frame_number == 0 &&
+      cpi->ext_ratectrl.funcs.send_firstpass_stats != NULL) {
+    const aom_codec_err_t codec_status = av1_extrc_send_firstpass_stats(
+        &cpi->ext_ratectrl, &cpi->ppi->twopass.firstpass_info);
+    if (codec_status != AOM_CODEC_OK) {
+      aom_internal_error(cpi->common.error, codec_status,
+                         "av1_extrc_send_firstpass_stats() failed");
+    }
+  }
+
   const FIRSTPASS_STATS *const start_pos = cpi->twopass_frame.stats_in;
   int update_total_stats = 0;
 
@@ -3814,6 +3837,8 @@ void av1_get_second_pass_params(AV1_COMP *cpi,
     frame_params->frame_type = KEY_FRAME;
     find_next_key_frame(cpi, &this_frame);
     this_frame = this_frame_copy;
+    // Mark prev gop arf source as unusable
+    cpi->ppi->tpl_data.prev_gop_arf_disp_order = -1;
   }
 
   if (rc->frames_to_fwd_kf <= 0)
