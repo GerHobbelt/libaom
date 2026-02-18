@@ -861,7 +861,9 @@ typedef struct MV_SPEED_FEATURES {
   SEARCH_METHODS search_method;
 
   // Enable the use of faster, less accurate mv search method
-  // 0: disable, 1: if bsize >= BLOCK_32X32, 2: based on bsize, SAD and qp
+  // 0: Disable
+  // 1 - 3: Disable for larger bsize
+  // 4: Based on bsize, SAD and qp
   // TODO(chiyotsai@google.com): Take the clip's resolution and mv activity into
   // account.
   int use_bsize_dependent_search_method;
@@ -956,11 +958,14 @@ typedef struct MV_SPEED_FEATURES {
   // 2: disable second MV
   int disable_second_mv;
 
-  // Skips full pixel search based on start mv of prior ref_mv_idx.
+  // Skips full pixel search based on closeness of start mv and ref mv
+  // of previous search.
   // 0: Disabled
-  // 1: Skips the full pixel search upto 4 neighbor full-pel MV positions.
-  // 2: Skips the full pixel search upto 8 neighbor full-pel MV positions.
-  int skip_fullpel_search_using_startmv;
+  // 1: Skips the full pixel search upto 4 neighbor full-pel start MV and ref MV
+  // positions.
+  // 2: Skips the full pixel search upto 8 neighbor full-pel start MV and ref MV
+  // positions.
+  int skip_fullpel_search_using_startmv_refmv;
 
   // Method to use for refining WARPED_CAUSAL motion vectors
   // TODO(rachelbarker): Can this be unified with OBMC in some way?
@@ -1222,6 +1227,11 @@ typedef struct INTER_MODE_SPEED_FEATURES {
   // encoder decisions are biased against local warp, favoring low complexity
   // modes.
   int bias_warp_mode_rd_scale_pct;
+
+  // Percentage of scaling used to increase the rd cost of obmc motion mode so
+  // that encoder decisions are biased against local obmc, favoring low
+  // complexity modes.
+  float bias_obmc_mode_rd_scale_pct;
 } INTER_MODE_SPEED_FEATURES;
 
 typedef struct INTERP_FILTER_SPEED_FEATURES {

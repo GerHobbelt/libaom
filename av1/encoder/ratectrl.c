@@ -2772,7 +2772,14 @@ int av1_calc_pframe_target_size_one_pass_cbr(
   const RATE_CONTROL *rc = &cpi->rc;
   const PRIMARY_RATE_CONTROL *p_rc = &cpi->ppi->p_rc;
   const RateControlCfg *rc_cfg = &oxcf->rc_cfg;
-  const int64_t diff = p_rc->optimal_buffer_level - p_rc->buffer_level;
+  const RefreshFrameInfo *const refresh_frame = &cpi->refresh_frame;
+  int64_t diff = p_rc->optimal_buffer_level - p_rc->buffer_level;
+  // For refresh alt or golden: keep diff negative to force setting
+  // higher target bandwidth on these frames.
+  // Only realtime mode with lookahead.
+  if (is_one_pass_rt_lag_params(cpi) &&
+      (refresh_frame->alt_ref_frame || refresh_frame->golden_frame))
+    diff = AOMMIN(diff, -p_rc->optimal_buffer_level);
   const int64_t one_pct_bits = 1 + p_rc->optimal_buffer_level / 100;
   int min_frame_target =
       AOMMAX(rc->avg_frame_bandwidth >> 4, FRAME_OVERHEAD_BITS);
@@ -3159,21 +3166,8 @@ static unsigned int estimate_scroll_motion(
   return best_sad;
 }
 
-/*!\brief Check for scene detection, for 1 pass real-time mode.
- *
- * Compute average source sad (temporal sad: between current source and
- * previous source) over a subset of superblocks. Use this is detect big changes
- * in content and set the \c cpi->rc.high_source_sad flag.
- *
- * \ingroup rate_control
- * \param[in]       cpi          Top level encoder structure
- * \param[in]       frame_input  Current and last input source frames
- *
- * \remark Nothing is returned. Instead the flag \c cpi->rc.high_source_sad
- * is set if scene change is detected, and \c cpi->rc.avg_source_sad is updated.
- */
-static void rc_scene_detection_onepass_rt(AV1_COMP *cpi,
-                                          const EncodeFrameInput *frame_input) {
+void av1_rc_scene_detection_onepass_rt(AV1_COMP *cpi,
+                                       const EncodeFrameInput *frame_input) {
   AV1_COMMON *const cm = &cpi->common;
   RATE_CONTROL *const rc = &cpi->rc;
   YV12_BUFFER_CONFIG const *const unscaled_src = frame_input->source;
@@ -3265,7 +3259,7 @@ static void rc_scene_detection_onepass_rt(AV1_COMP *cpi,
       rc->prev_frame_is_dropped || cpi->svc.number_temporal_layers > 1;
   // Store blkwise SAD for later use. Disable for spatial layers for now.
   if (width == cm->render_width && height == cm->render_height &&
-      cpi->svc.number_spatial_layers == 1) {
+      cpi->svc.number_spatial_layers == 1 && !is_one_pass_rt_lag_params(cpi)) {
     if (cpi->src_sad_blk_64x64 == NULL) {
       CHECK_MEM_ERROR(cm, cpi->src_sad_blk_64x64,
                       (uint64_t *)aom_calloc(sb_cols * sb_rows,
@@ -3354,7 +3348,7 @@ static void rc_scene_detection_onepass_rt(AV1_COMP *cpi,
   const uint64_t thresh_high_motion = scale * 64 * 64;
   if (cpi->svc.temporal_layer_id == 0 && rc->drop_count_consec < 3) {
     cpi->rc.high_motion_content_screen_rtc = 0;
-    if (cpi->oxcf.speed >= 11 &&
+    if (cpi->oxcf.speed >= 11 && !is_one_pass_rt_lag_params(cpi) &&
         cpi->oxcf.tune_cfg.content == AOM_CONTENT_SCREEN &&
         rc->num_col_blscroll_last_tl0 < 5 &&
         rc->num_row_blscroll_last_tl0 < 5 &&
@@ -3833,7 +3827,7 @@ void av1_get_one_pass_rt_params(AV1_COMP *cpi, FRAME_TYPE *const frame_type,
              svc->spatial_layer_id == 0) {
     if (rc->prev_coded_width == cm->width &&
         rc->prev_coded_height == cm->height) {
-      rc_scene_detection_onepass_rt(cpi, frame_input);
+      av1_rc_scene_detection_onepass_rt(cpi, frame_input);
     } else {
       aom_free(cpi->src_sad_blk_64x64);
       cpi->src_sad_blk_64x64 = NULL;

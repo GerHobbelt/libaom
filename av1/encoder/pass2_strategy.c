@@ -2179,10 +2179,12 @@ static void correct_frames_to_key(AV1_COMP *cpi) {
  * case of one pass encoding where no lookahead stats are avialable.
  *
  * \param[in]    cpi             Top-level encoder structure
+ * \param[in]    is_final_pass   Whether it is the second call to
+ *                               define_gf_group().
  *
  * \remark Nothing is returned. Instead, cpi->ppi->gf_group is changed.
  */
-static void define_gf_group_pass0(AV1_COMP *cpi) {
+static void define_gf_group_pass0(AV1_COMP *cpi, const int is_final_pass) {
   RATE_CONTROL *const rc = &cpi->rc;
   PRIMARY_RATE_CONTROL *const p_rc = &cpi->ppi->p_rc;
   GF_GROUP *const gf_group = &cpi->ppi->gf_group;
@@ -2220,7 +2222,7 @@ static void define_gf_group_pass0(AV1_COMP *cpi) {
     gf_group->max_layer_depth_allowed = 0;
 
   // Set up the structure of this Group-Of-Pictures (same as GF_GROUP)
-  av1_gop_setup_structure(cpi);
+  av1_gop_setup_structure(cpi, is_final_pass);
 
   // Allocate bits to each of the frames in the GF group.
   // TODO(sarahparker) Extend this to work with pyramid structure.
@@ -2544,7 +2546,7 @@ static void define_gf_group(AV1_COMP *cpi, EncodeFrameParams *frame_params,
   }
 
   if (has_no_stats_stage(cpi)) {
-    define_gf_group_pass0(cpi);
+    define_gf_group_pass0(cpi, is_final_pass);
     return;
   }
 
@@ -2645,7 +2647,7 @@ static void define_gf_group(AV1_COMP *cpi, EncodeFrameParams *frame_params,
   update_gop_length(rc, p_rc, i, is_final_pass);
 
   // Set up the structure of this Group-Of-Pictures (same as GF_GROUP)
-  av1_gop_setup_structure(cpi);
+  av1_gop_setup_structure(cpi, is_final_pass);
 
   set_gop_bits_boost(cpi, i, is_intra_only, is_final_pass, use_alt_ref,
                      alt_offset, start_pos, &gf_stats);
@@ -2721,7 +2723,7 @@ static int define_gf_group_pass3(AV1_COMP *cpi, EncodeFrameParams *frame_params,
   update_gop_length(rc, p_rc, i, is_final_pass);
 
   // Set up the structure of this Group-Of-Pictures (same as GF_GROUP)
-  av1_gop_setup_structure(cpi);
+  av1_gop_setup_structure(cpi, is_final_pass);
 
   set_gop_bits_boost(cpi, i, is_intra_only, is_final_pass, use_alt_ref, 0,
                      start_pos, &gf_stats);
@@ -3754,6 +3756,93 @@ static void estimate_coeff(FIRSTPASS_STATS *first_stats,
   first_stats->cor_coeff = 1.0;
 }
 
+static void get_one_pass_rt_lag_params(AV1_COMP *cpi, unsigned int frame_flags,
+                                       EncodeFrameParams *const frame_params) {
+  RATE_CONTROL *const rc = &cpi->rc;
+  PRIMARY_RATE_CONTROL *const p_rc = &cpi->ppi->p_rc;
+  GF_GROUP *const gf_group = &cpi->ppi->gf_group;
+  const AV1EncoderConfig *const oxcf = &cpi->oxcf;
+  // Check forced key frames.
+  const int frames_to_next_forced_key = detect_app_forced_key(cpi);
+  if (frames_to_next_forced_key == 0) {
+    rc->frames_to_key = 0;
+    frame_flags &= FRAMEFLAGS_KEY;
+  } else if (frames_to_next_forced_key > 0 &&
+             frames_to_next_forced_key < rc->frames_to_key) {
+    rc->frames_to_key = frames_to_next_forced_key;
+  }
+  frame_params->frame_type = gf_group->frame_type[cpi->gf_frame_index];
+  if (cpi->gf_frame_index < gf_group->size && !(frame_flags & FRAMEFLAGS_KEY)) {
+    av1_setup_target_rate(cpi);
+  }
+  // Keyframe processing.
+  if (rc->frames_to_key <= 0) {
+    const KeyFrameCfg *const kf_cfg = &oxcf->kf_cfg;
+    assert(rc->frames_to_key == 0);
+    // Define next KF group.
+    frame_params->frame_type = KEY_FRAME;
+    rc->frames_since_key = 0;
+    // Use arfs if possible.
+    p_rc->use_arf_in_this_kf_group = is_altref_enabled(
+        oxcf->gf_cfg.lag_in_frames, oxcf->gf_cfg.enable_auto_arf);
+    // Reset the GF group data structures.
+    av1_zero(*gf_group);
+    cpi->gf_frame_index = 0;
+    // KF is always a GF so clear frames till next gf counter.
+    rc->frames_till_gf_update_due = 0;
+    int num_frames_to_app_forced_key = detect_app_forced_key(cpi);
+    p_rc->this_key_frame_forced =
+        cpi->common.current_frame.frame_number != 0 && rc->frames_to_key == 0;
+    if (num_frames_to_app_forced_key != -1)
+      rc->frames_to_key = num_frames_to_app_forced_key;
+    else
+      rc->frames_to_key = AOMMAX(1, kf_cfg->key_freq_max);
+    correct_frames_to_key(cpi);
+    p_rc->kf_boost = DEFAULT_KF_BOOST;
+    gf_group->update_type[0] = KF_UPDATE;
+  }
+  // Define a new GF/ARF group. (Should always enter here for key frames).
+  if (cpi->gf_frame_index == gf_group->size) {
+    int max_gop_length =
+        (oxcf->gf_cfg.lag_in_frames >= 32)
+            ? AOMMIN(MAX_GF_INTERVAL, oxcf->gf_cfg.lag_in_frames -
+                                          oxcf->algo_cfg.arnr_max_frames / 2)
+            : MAX_GF_LENGTH_LAP;
+    // Limit the max gop length for the last gop in 1 pass setting.
+    max_gop_length = AOMMIN(max_gop_length, rc->frames_to_key);
+    // Go through source frames in lookahead buffer and compute source metrics:
+    // scene change, frame average source sad, etc.
+    for (int i = 1; i < max_gop_length; i++) {
+      EncodeFrameInput frame_input;
+      memset(&frame_input, 0, sizeof(frame_input));
+      struct lookahead_entry *e =
+          av1_lookahead_peek(cpi->ppi->lookahead, i, cpi->compressor_stage);
+      struct lookahead_entry *e_prev =
+          av1_lookahead_peek(cpi->ppi->lookahead, i - 1, cpi->compressor_stage);
+      if (e != NULL && e_prev != NULL) {
+        frame_input.source = &e->img;
+        frame_input.last_source = &e_prev->img;
+        rc->high_source_sad_lag[i] = -1;
+        rc->frame_source_sad_lag[i] = 0;
+        rc->avg_source_sad = 0;
+        av1_rc_scene_detection_onepass_rt(cpi, &frame_input);
+        rc->high_source_sad_lag[i] = rc->high_source_sad;
+        rc->frame_source_sad_lag[i] = rc->frame_source_sad;
+        // Use rc->high_source_sad_lag[i] and frame_source_sad_lag[i] to
+        // adjust/adapt the gop parameters. Reset the parameters for the
+        // encoding.
+        rc->high_source_sad = 0;
+        rc->frame_source_sad = UINT64_MAX;
+      }
+    }
+    calculate_gf_length(cpi, max_gop_length, MAX_NUM_GF_INTERVALS);
+    define_gf_group(cpi, frame_params, 0);
+    rc->frames_till_gf_update_due = p_rc->baseline_gf_interval;
+    frame_params->frame_type = gf_group->frame_type[cpi->gf_frame_index];
+    av1_setup_target_rate(cpi);
+  }
+}
+
 void av1_get_second_pass_params(AV1_COMP *cpi,
                                 EncodeFrameParams *const frame_params,
                                 unsigned int frame_flags) {
@@ -3762,6 +3851,19 @@ void av1_get_second_pass_params(AV1_COMP *cpi,
   TWO_PASS *const twopass = &cpi->ppi->twopass;
   GF_GROUP *const gf_group = &cpi->ppi->gf_group;
   const AV1EncoderConfig *const oxcf = &cpi->oxcf;
+
+  if (is_one_pass_rt_lag_params(cpi)) {
+    get_one_pass_rt_lag_params(cpi, frame_flags, frame_params);
+    return;
+  }
+
+  if (cpi->ext_ratectrl.ready &&
+      (cpi->ext_ratectrl.funcs.rc_type & AOM_RC_GOP) != 0 &&
+      cpi->ext_ratectrl.funcs.get_gop_decision != NULL) {
+    frame_params->show_frame =
+        !(gf_group->update_type[cpi->gf_frame_index] == ARF_UPDATE ||
+          gf_group->update_type[cpi->gf_frame_index] == INTNL_ARF_UPDATE);
+  }
 
   if (cpi->use_ducky_encode &&
       cpi->ducky_encode_info.frame_info.gop_mode == DUCKY_ENCODE_GOP_MODE_RCL) {
@@ -3902,7 +4004,7 @@ void av1_get_second_pass_params(AV1_COMP *cpi,
       p_rc->frames_till_regions_update = rest_frames;
 
       int ret;
-      if (cpi->ppi->lap_enabled && !is_one_pass_rt_lag_params(cpi)) {
+      if (cpi->ppi->lap_enabled) {
         mark_flashes(twopass->stats_buf_ctx->stats_in_start,
                      twopass->stats_buf_ctx->stats_in_end);
         estimate_noise(twopass->stats_buf_ctx->stats_in_start,
@@ -4022,13 +4124,6 @@ void av1_get_second_pass_params(AV1_COMP *cpi,
     }
 
     define_gf_group(cpi, frame_params, 0);
-
-    if (is_one_pass_rt_lag_params(cpi)) {
-      rc->frames_till_gf_update_due = p_rc->baseline_gf_interval;
-      frame_params->frame_type = gf_group->frame_type[cpi->gf_frame_index];
-      av1_setup_target_rate(cpi);
-      return;
-    }
 
     if (gf_group->update_type[cpi->gf_frame_index] != ARF_UPDATE &&
         rc->frames_since_key > 0)

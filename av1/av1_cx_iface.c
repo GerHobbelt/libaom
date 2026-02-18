@@ -8,6 +8,8 @@
  * Media Patent License 1.0 was not distributed with this source code in the
  * PATENTS file, you can obtain it at www.aomedia.org/license/patent.
  */
+
+#include <assert.h>
 #include <limits.h>
 #include <math.h>
 #include <stdbool.h>
@@ -1363,6 +1365,13 @@ static void set_encoder_config(AV1EncoderConfig *oxcf,
 #else
   gf_cfg->lag_in_frames = clamp(cfg->g_lag_in_frames, 0, MAX_LAG_BUFFERS);
 #endif
+
+  // Modify lag_in_frames slightly for better coding performance (e.g. better
+  // temporal filtering result).
+  if (oxcf->mode == GOOD && gf_cfg->lag_in_frames >= 32 &&
+      gf_cfg->lag_in_frames < 39)
+    gf_cfg->lag_in_frames = AOMMIN(39, MAX_LAG_BUFFERS);
+
   gf_cfg->enable_auto_arf = extra_cfg->enable_auto_alt_ref;
   gf_cfg->enable_auto_brf = extra_cfg->enable_auto_bwd_ref;
   gf_cfg->min_gf_interval = extra_cfg->min_gf_interval;
@@ -3011,9 +3020,8 @@ static aom_codec_err_t encoder_init(aom_codec_ctx_t *ctx) {
       reduce_ratio(&priv->timestamp_ratio);
 
       set_encoder_config(&priv->oxcf, &priv->cfg, &priv->extra_cfg);
-      if (priv->oxcf.rc_cfg.mode != AOM_CBR &&
-          priv->oxcf.pass == AOM_RC_ONE_PASS) {
-        // Enable look ahead - enabled for AOM_Q, AOM_CQ, AOM_VBR
+      if (priv->oxcf.pass == AOM_RC_ONE_PASS) {
+        // Enable look ahead.
         *num_lap_buffers =
             AOMMIN((int)priv->cfg.g_lag_in_frames,
                    AOMMIN(MAX_LAP_BUFFERS, priv->oxcf.kf_cfg.key_freq_max +
@@ -3577,6 +3585,15 @@ static aom_codec_err_t encoder_encode(aom_codec_alg_priv_t *ctx,
 
 #endif  // CONFIG_FPMT_TEST
       if (!simulate_parallel_frame) {
+        // Add a range check here to give an error for frame_parallel_level
+        // array out-of-bounds access.
+        if (cpi->gf_frame_index >= MAX_STATIC_GF_GROUP_LENGTH) {
+          aom_internal_error(&ppi->error, AOM_CODEC_ERROR,
+                             "cpi->gf_frame_index is out of range");
+        }
+
+        // May need a better way for checking the frame's frame_parallel_level,
+        // especially for the first frame of the following gop.
         if (ppi->gf_group.frame_parallel_level[cpi->gf_frame_index] == 0) {
           status = av1_get_compressed_data(cpi, &cpi_data);
         } else if (ppi->gf_group.frame_parallel_level[cpi->gf_frame_index] ==
@@ -4083,7 +4100,14 @@ static aom_codec_err_t ctrl_set_svc_params(aom_codec_alg_priv_t *ctx,
       seq_params->operating_points_cnt_minus_1 =
           ppi->number_spatial_layers * ppi->number_temporal_layers - 1;
 
+      struct aom_internal_error_info *const error = cpi->common.error;
+      if (setjmp(error->jmp)) {
+        error->setjmp = 0;
+        return error->error_code;
+      }
+      error->setjmp = 1;
       av1_init_layer_context(cpi);
+      error->setjmp = 0;
       // update_encoder_cfg() is somewhat costly and this control may be called
       // multiple times, so update_encoder_cfg() is only called to ensure frame
       // and superblock sizes are updated before they're fixed by the first
