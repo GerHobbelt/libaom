@@ -2190,13 +2190,9 @@ static void define_gf_group_pass0(AV1_COMP *cpi) {
   const GFConfig *const gf_cfg = &oxcf->gf_cfg;
   int target;
 
-  if (oxcf->q_cfg.aq_mode == CYCLIC_REFRESH_AQ) {
-    av1_cyclic_refresh_set_golden_update(cpi);
-  } else {
-    p_rc->baseline_gf_interval = p_rc->gf_intervals[p_rc->cur_gf_index];
-    rc->intervals_till_gf_calculate_due--;
-    p_rc->cur_gf_index++;
-  }
+  p_rc->baseline_gf_interval = p_rc->gf_intervals[p_rc->cur_gf_index];
+  rc->intervals_till_gf_calculate_due--;
+  p_rc->cur_gf_index++;
 
   // correct frames_to_key when lookahead queue is flushing
   correct_frames_to_key(cpi);
@@ -2208,7 +2204,13 @@ static void define_gf_group_pass0(AV1_COMP *cpi) {
   p_rc->constrained_gf_group =
       (p_rc->baseline_gf_interval >= rc->frames_to_key) ? 1 : 0;
 
-  gf_group->max_layer_depth_allowed = oxcf->gf_cfg.gf_max_pyr_height;
+  // Default for pyr_height if inputs not set.
+  if (oxcf->gf_cfg.gf_max_pyr_height == 0 ||
+      oxcf->gf_cfg.gf_min_pyr_height == 0) {
+    gf_group->max_layer_depth_allowed = 1;
+  } else {
+    gf_group->max_layer_depth_allowed = oxcf->gf_cfg.gf_max_pyr_height;
+  }
 
   // Rare case when the look-ahead is less than the target GOP length, can't
   // generate ARF frame.
@@ -3008,7 +3010,9 @@ static int define_kf_interval(AV1_COMP *cpi,
 
             if (next_stats == NULL) continue;
 
-            if (next_stats->lt_coded_error * 2.5 < next_stats->coded_error)
+            if (cpi->common.current_frame.frame_number + frames_to_key + idx >
+                    2 &&
+                next_stats->lt_coded_error * 2.5 < next_stats->coded_error)
               test_next_gop = 1;
           }
 
@@ -3282,15 +3286,30 @@ static void find_next_key_frame(AV1_COMP *cpi, FIRSTPASS_STATS *this_frame) {
   kf_raw_err = this_frame->intra_error;
   kf_mod_err = calculate_modified_err(frame_info, twopass, oxcf, this_frame);
 
-  // We assume the current frame is a key frame and we are looking for the next
-  // key frame. Therefore search_start_idx = 1
-  frames_to_key = define_kf_interval(cpi, firstpass_info, kf_cfg->key_freq_max,
-                                     /*search_start_idx=*/1);
-
-  if (frames_to_key != -1) {
-    rc->frames_to_key = AOMMIN(kf_cfg->key_freq_max, frames_to_key);
+  if (cpi->ext_ratectrl.ready &&
+      (cpi->ext_ratectrl.funcs.rc_type & AOM_RC_GOP) != 0 &&
+      cpi->ext_ratectrl.funcs.get_key_frame_decision != NULL) {
+    aom_rc_key_frame_decision_t key_frame_decision;
+    aom_codec_err_t codec_status = av1_extrc_get_key_frame_decision(
+        &cpi->ext_ratectrl, &key_frame_decision);
+    if (codec_status == AOM_CODEC_OK) {
+      rc->frames_to_key = key_frame_decision.key_frame_group_size;
+    } else {
+      aom_internal_error(cpi->common.error, codec_status,
+                         "av1_extrc_get_key_frame_decision() failed");
+    }
   } else {
-    rc->frames_to_key = kf_cfg->key_freq_max;
+    // We assume the current frame is a key frame and we are looking for the
+    // next key frame. Therefore search_start_idx = 1
+    frames_to_key =
+        define_kf_interval(cpi, firstpass_info, kf_cfg->key_freq_max,
+                           /*search_start_idx=*/1);
+
+    if (frames_to_key != -1) {
+      rc->frames_to_key = AOMMIN(kf_cfg->key_freq_max, frames_to_key);
+    } else {
+      rc->frames_to_key = kf_cfg->key_freq_max;
+    }
   }
 
   if (cpi->ppi->lap_enabled) correct_frames_to_key(cpi);
@@ -3883,7 +3902,7 @@ void av1_get_second_pass_params(AV1_COMP *cpi,
       p_rc->frames_till_regions_update = rest_frames;
 
       int ret;
-      if (cpi->ppi->lap_enabled) {
+      if (cpi->ppi->lap_enabled && !is_one_pass_rt_lag_params(cpi)) {
         mark_flashes(twopass->stats_buf_ctx->stats_in_start,
                      twopass->stats_buf_ctx->stats_in_end);
         estimate_noise(twopass->stats_buf_ctx->stats_in_start,
@@ -4003,6 +4022,13 @@ void av1_get_second_pass_params(AV1_COMP *cpi,
     }
 
     define_gf_group(cpi, frame_params, 0);
+
+    if (is_one_pass_rt_lag_params(cpi)) {
+      rc->frames_till_gf_update_due = p_rc->baseline_gf_interval;
+      frame_params->frame_type = gf_group->frame_type[cpi->gf_frame_index];
+      av1_setup_target_rate(cpi);
+      return;
+    }
 
     if (gf_group->update_type[cpi->gf_frame_index] != ARF_UPDATE &&
         rc->frames_since_key > 0)

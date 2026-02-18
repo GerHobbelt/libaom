@@ -1976,11 +1976,10 @@ static int get_active_best_quality(const AV1_COMP *const cpi,
   int *inter_minq;
   ASSIGN_MINQ_TABLE(bit_depth, inter_minq);
   int active_best_quality = 0;
-  const int is_intrl_arf_boost =
-      gf_group->update_type[gf_index] == INTNL_ARF_UPDATE;
-  int is_leaf_frame =
-      !(gf_group->update_type[gf_index] == ARF_UPDATE ||
-        gf_group->update_type[gf_index] == GF_UPDATE || is_intrl_arf_boost);
+  FRAME_UPDATE_TYPE update_type = gf_group->update_type[gf_index];
+  const int is_intrl_arf_boost = update_type == INTNL_ARF_UPDATE;
+  int is_leaf_frame = !(update_type == ARF_UPDATE || update_type == GF_UPDATE ||
+                        is_intrl_arf_boost);
 
   // TODO(jingning): Consider to rework this hack that covers issues incurred
   // in lightfield setting.
@@ -1988,7 +1987,8 @@ static int get_active_best_quality(const AV1_COMP *const cpi,
     is_leaf_frame = !(refresh_frame->golden_frame ||
                       refresh_frame->alt_ref_frame || is_intrl_arf_boost);
   }
-  const int is_overlay_frame = rc->is_src_frame_alt_ref;
+  const int is_overlay_frame =
+      update_type == OVERLAY_UPDATE || update_type == INTNL_OVERLAY_UPDATE;
 
   if (is_leaf_frame || is_overlay_frame) {
     if (rc_mode == AOM_Q) return cq_level;
@@ -2481,13 +2481,15 @@ void av1_rc_postencode_update(AV1_COMP *cpi, uint64_t bytes_used) {
   }
   if (cpi->refresh_frame.golden_frame)
     rc->frame_num_last_gf_refresh = current_frame->frame_number;
+
+  if (rc->frame_source_sad < 10000)
+    rc->last_frame_low_source_sad = rc->frame_number_encoded;
+
   rc->prev_coded_width = cm->width;
   rc->prev_coded_height = cm->height;
   rc->frame_number_encoded++;
   rc->prev_frame_is_dropped = 0;
   rc->drop_count_consec = 0;
-  if (rc->frame_source_sad < 10000)
-    rc->last_frame_low_source_sad = current_frame->frame_number;
 }
 
 void av1_rc_postencode_update_drop_frame(AV1_COMP *cpi) {
@@ -2589,38 +2591,30 @@ int av1_compute_qdelta_by_rate(const AV1_COMP *cpi, FRAME_TYPE frame_type,
 static void set_gf_interval_range(const AV1_COMP *const cpi,
                                   RATE_CONTROL *const rc) {
   const AV1EncoderConfig *const oxcf = &cpi->oxcf;
+  // Set Maximum gf/arf interval
+  rc->max_gf_interval = oxcf->gf_cfg.max_gf_interval;
+  rc->min_gf_interval = oxcf->gf_cfg.min_gf_interval;
+  if (rc->min_gf_interval == 0)
+    rc->min_gf_interval = av1_rc_get_default_min_gf_interval(
+        oxcf->frm_dim_cfg.width, oxcf->frm_dim_cfg.height, cpi->framerate);
+  if (rc->max_gf_interval == 0)
+    rc->max_gf_interval =
+        get_default_max_gf_interval(cpi->framerate, rc->min_gf_interval);
+  /*
+   * Extended max interval for genuinely static scenes like slide shows.
+   * The no.of.stats available in the case of LAP is limited,
+   * hence setting to max_gf_interval.
+   */
+  if (cpi->ppi->lap_enabled)
+    rc->static_scene_max_gf_interval = rc->max_gf_interval + 1;
+  else
+    rc->static_scene_max_gf_interval = MAX_STATIC_GF_GROUP_LENGTH;
 
-  // Special case code for 1 pass fixed Q mode tests
-  if ((has_no_stats_stage(cpi)) && (oxcf->rc_cfg.mode == AOM_Q)) {
-    rc->max_gf_interval = oxcf->gf_cfg.max_gf_interval;
-    rc->min_gf_interval = oxcf->gf_cfg.min_gf_interval;
-    rc->static_scene_max_gf_interval = rc->min_gf_interval + 1;
-  } else {
-    // Set Maximum gf/arf interval
-    rc->max_gf_interval = oxcf->gf_cfg.max_gf_interval;
-    rc->min_gf_interval = oxcf->gf_cfg.min_gf_interval;
-    if (rc->min_gf_interval == 0)
-      rc->min_gf_interval = av1_rc_get_default_min_gf_interval(
-          oxcf->frm_dim_cfg.width, oxcf->frm_dim_cfg.height, cpi->framerate);
-    if (rc->max_gf_interval == 0)
-      rc->max_gf_interval =
-          get_default_max_gf_interval(cpi->framerate, rc->min_gf_interval);
-    /*
-     * Extended max interval for genuinely static scenes like slide shows.
-     * The no.of.stats available in the case of LAP is limited,
-     * hence setting to max_gf_interval.
-     */
-    if (cpi->ppi->lap_enabled)
-      rc->static_scene_max_gf_interval = rc->max_gf_interval + 1;
-    else
-      rc->static_scene_max_gf_interval = MAX_STATIC_GF_GROUP_LENGTH;
+  if (rc->max_gf_interval > rc->static_scene_max_gf_interval)
+    rc->max_gf_interval = rc->static_scene_max_gf_interval;
 
-    if (rc->max_gf_interval > rc->static_scene_max_gf_interval)
-      rc->max_gf_interval = rc->static_scene_max_gf_interval;
-
-    // Clamp min to max
-    rc->min_gf_interval = AOMMIN(rc->min_gf_interval, rc->max_gf_interval);
-  }
+  // Clamp min to max
+  rc->min_gf_interval = AOMMIN(rc->min_gf_interval, rc->max_gf_interval);
 }
 
 void av1_rc_update_framerate(AV1_COMP *cpi, int width, int height) {
@@ -2745,7 +2739,7 @@ void av1_set_target_rate(AV1_COMP *cpi, int width, int height) {
 
 int av1_calc_pframe_target_size_one_pass_vbr(
     const AV1_COMP *const cpi, FRAME_UPDATE_TYPE frame_update_type) {
-  static const int af_ratio = 10;
+  const int af_ratio = is_one_pass_rt_lag_params(cpi) ? 6 : 10;
   const RATE_CONTROL *const rc = &cpi->rc;
   const PRIMARY_RATE_CONTROL *const p_rc = &cpi->ppi->p_rc;
   int64_t target;
@@ -3362,12 +3356,12 @@ static void rc_scene_detection_onepass_rt(AV1_COMP *cpi,
     cpi->rc.high_motion_content_screen_rtc = 0;
     if (cpi->oxcf.speed >= 11 &&
         cpi->oxcf.tune_cfg.content == AOM_CONTENT_SCREEN &&
-        rc->num_col_blscroll_last_tl0 == 0 &&
-        rc->num_row_blscroll_last_tl0 == 0 &&
+        rc->num_col_blscroll_last_tl0 < 5 &&
+        rc->num_row_blscroll_last_tl0 < 5 &&
         rc->percent_blocks_with_motion > 40 &&
         rc->prev_avg_source_sad > thresh_high_motion &&
         rc->avg_source_sad > thresh_high_motion &&
-        cm->current_frame.frame_number - rc->last_frame_low_source_sad > 10 &&
+        rc->frame_number_encoded - rc->last_frame_low_source_sad > 12 &&
         rc->avg_frame_low_motion < 60 && unscaled_src->y_width >= 1280 &&
         unscaled_src->y_height >= 720) {
       cpi->rc.high_motion_content_screen_rtc = 1;

@@ -233,12 +233,11 @@ static void set_allintra_speed_feature_framesize_dependent(
     }
 
     if (is_720p_or_larger) {
-      sf->part_sf.ml_partition_search_breakout_thresh[0] = 0.9999999f;
-      sf->part_sf.ml_partition_search_breakout_thresh[1] = 0.9999999f;
-      sf->part_sf.ml_partition_search_breakout_thresh[2] = 0.9618367258814811f;
-      sf->part_sf.ml_partition_search_breakout_thresh[3] = 0.9990705139233304f;
-      sf->part_sf.ml_partition_search_breakout_thresh[4] = 0.9648891196441841f;
-
+      sf->part_sf.ml_partition_search_breakout_thresh[0] = 0.5f;
+      sf->part_sf.ml_partition_search_breakout_thresh[1] = 0.5042595622791082f;
+      sf->part_sf.ml_partition_search_breakout_thresh[2] = 0.5f;
+      sf->part_sf.ml_partition_search_breakout_thresh[3] = 0.8378425823517456f;
+      sf->part_sf.ml_partition_search_breakout_thresh[4] = 0.8047585616503903f;
       sf->part_sf.ml_partition_search_breakout_model_index = 1;
     } else {
       sf->part_sf.ml_partition_search_breakout_thresh[0] = -1.0f;
@@ -259,11 +258,11 @@ static void set_allintra_speed_feature_framesize_dependent(
     }
 
     if (is_720p_or_larger) {
-      sf->part_sf.ml_partition_search_breakout_thresh[0] = 0.9583713938680828f;
-      sf->part_sf.ml_partition_search_breakout_thresh[1] = 0.9999999f;
-      sf->part_sf.ml_partition_search_breakout_thresh[2] = 0.9634239069901543f;
-      sf->part_sf.ml_partition_search_breakout_thresh[3] = 0.9000000000000001f;
-      sf->part_sf.ml_partition_search_breakout_thresh[4] = 0.9196596355880025f;
+      sf->part_sf.ml_partition_search_breakout_thresh[0] = 0.5f;
+      sf->part_sf.ml_partition_search_breakout_thresh[1] = 0.5042595622791082f;
+      sf->part_sf.ml_partition_search_breakout_thresh[2] = 0.5f;
+      sf->part_sf.ml_partition_search_breakout_thresh[3] = 0.8378425823517456f;
+      sf->part_sf.ml_partition_search_breakout_thresh[4] = 0.8047585616503903f;
       sf->part_sf.ml_partition_search_breakout_model_index = 1;
     }
 
@@ -785,11 +784,11 @@ static void set_good_speed_feature_framesize_dependent(
     }
 
     if (is_720p_or_larger) {
-      sf->part_sf.ml_partition_search_breakout_thresh[0] = 0.9999999f;
-      sf->part_sf.ml_partition_search_breakout_thresh[1] = 0.9999999f;
-      sf->part_sf.ml_partition_search_breakout_thresh[2] = 0.9618367258814811f;
-      sf->part_sf.ml_partition_search_breakout_thresh[3] = 0.9990705139233304f;
-      sf->part_sf.ml_partition_search_breakout_thresh[4] = 0.9648891196441841f;
+      sf->part_sf.ml_partition_search_breakout_thresh[0] = 0.5f;
+      sf->part_sf.ml_partition_search_breakout_thresh[1] = 0.5042595622791082f;
+      sf->part_sf.ml_partition_search_breakout_thresh[2] = 0.5f;
+      sf->part_sf.ml_partition_search_breakout_thresh[3] = 0.8378425823517456f;
+      sf->part_sf.ml_partition_search_breakout_thresh[4] = 0.8047585616503903f;
       sf->part_sf.ml_partition_search_breakout_model_index = 1;
     } else {
       sf->part_sf.ml_partition_search_breakout_thresh[0] = -1.0f;
@@ -812,11 +811,11 @@ static void set_good_speed_feature_framesize_dependent(
     }
 
     if (is_720p_or_larger) {
-      sf->part_sf.ml_partition_search_breakout_thresh[0] = 0.9583713938680828f;
-      sf->part_sf.ml_partition_search_breakout_thresh[1] = 0.9999999f;
-      sf->part_sf.ml_partition_search_breakout_thresh[2] = 0.9634239069901543f;
-      sf->part_sf.ml_partition_search_breakout_thresh[3] = 0.9000000000000001f;
-      sf->part_sf.ml_partition_search_breakout_thresh[4] = 0.9196596355880025f;
+      sf->part_sf.ml_partition_search_breakout_thresh[0] = 0.5f;
+      sf->part_sf.ml_partition_search_breakout_thresh[1] = 0.5042595622791082f;
+      sf->part_sf.ml_partition_search_breakout_thresh[2] = 0.5f;
+      sf->part_sf.ml_partition_search_breakout_thresh[3] = 0.8378425823517456f;
+      sf->part_sf.ml_partition_search_breakout_thresh[4] = 0.8047585616503903f;
       sf->part_sf.ml_partition_search_breakout_model_index = 1;
     }
 
@@ -1832,6 +1831,27 @@ static void set_rt_speed_feature_framesize_dependent(const AV1_COMP *const cpi,
   if (is_psnr_calc_enabled(cpi) && (cpi->oxcf.frm_dim_cfg.width != cm->width ||
                                     cpi->oxcf.frm_dim_cfg.height != cm->height))
     sf->rt_sf.use_rtc_tf = 0;
+
+  // This speed feature is causing artifacts with active_maps enabled, so
+  // disable for now.
+  if (cpi->active_map.enabled)
+    sf->rt_sf.set_zeromv_skip_based_on_source_sad = 0;
+
+  if (is_one_pass_rt_lag_params(cpi)) {
+    sf->rt_sf.use_nonrd_altref_frame = 1;
+    // For non-zero lag: disable the 3 speed features below for now,
+    // until further testing.
+    sf->rt_sf.use_rtc_tf = 0;
+    sf->rt_sf.nonrd_check_partition_merge_mode = 0;
+    sf->rt_sf.nonrd_check_partition_split = 0;
+    // These (nonrd) speed features that force zeromv-LAST early in partition
+    // are disabled since for src_frame_alt_ref frame the zeromv-ALTREF_FRAME
+    // mode is forced in the nonrd_pickmode.
+    if (cpi->rc.is_src_frame_alt_ref) {
+      sf->rt_sf.increase_source_sad_thresh = 0;
+      sf->rt_sf.part_early_exit_zeromv = 0;
+    }
+  }
 }
 
 static void set_rt_speed_features_framesize_independent(AV1_COMP *cpi,
@@ -1970,7 +1990,7 @@ static void set_rt_speed_features_framesize_independent(AV1_COMP *cpi,
   sf->rt_sf.mode_search_skip_flags |= FLAG_SKIP_INTRA_DIRMISMATCH;
   sf->rt_sf.num_inter_modes_for_tx_search = 5;
   sf->rt_sf.prune_inter_modes_using_temp_var = 1;
-  sf->rt_sf.use_real_time_ref_set = 1;
+  sf->rt_sf.use_real_time_ref_set = is_one_pass_rt_lag_params(cpi) ? 0 : 1;
   sf->rt_sf.use_simple_rd_model = 1;
   sf->rt_sf.prune_inter_modes_with_golden_ref = boosted ? 0 : 1;
   // TODO(any): This sf could be removed.
@@ -1998,6 +2018,13 @@ static void set_rt_speed_features_framesize_independent(AV1_COMP *cpi,
   if (!frame_is_intra_only(&cpi->common)) sf->rt_sf.var_part_based_on_qidx = 1;
   sf->rt_sf.use_fast_fixed_part = 0;
   sf->rt_sf.increase_source_sad_thresh = 0;
+
+  if (is_one_pass_rt_lag_params(cpi) && speed <= 6) {
+    sf->hl_sf.frame_parameter_update = 1;
+    sf->inter_sf.use_dist_wtd_comp_flag = 0;
+    sf->inter_sf.disable_masked_comp = 1;
+    sf->inter_sf.disable_onesided_comp = 1;
+  }
 
   if (speed >= 6) {
     sf->mv_sf.use_fullpel_costlist = 1;
@@ -2423,6 +2450,7 @@ static inline void init_lpf_sf(LOOP_FILTER_SPEED_FEATURES *lpf_sf) {
   lpf_sf->lpf_pick = LPF_PICK_FROM_FULL_IMAGE;
   lpf_sf->use_coarse_filter_level_search = 0;
   lpf_sf->cdef_pick_method = CDEF_FULL_SEARCH;
+  lpf_sf->zero_low_cdef_strengths = 0;
   // Set decoder side speed feature to use less dual sgr modes
   lpf_sf->dual_sgr_penalty_level = 0;
   // Enable Wiener and Self-guided Loop restoration filters by default.
@@ -2795,6 +2823,12 @@ void av1_set_speed_features_qindex_dependent(AV1_COMP *cpi, int speed) {
               : cm->quant_params.base_qindex > qindex_thresh;
     }
     return;
+  }
+
+  if (cpi->oxcf.mode == ALLINTRA) {
+    if (cm->quant_params.base_qindex <= 140) {
+      sf->lpf_sf.zero_low_cdef_strengths = 1;
+    }
   }
 
   if (speed == 0) {
