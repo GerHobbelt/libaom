@@ -256,6 +256,11 @@ enum {
 
 typedef struct {
   TX_TYPE_PRUNE_MODE prune_2d_txfm_mode;
+
+  // Limit the intra transform search type.
+  // 1 : Limit the intra transform search type to the ones in the table
+  // av1_derived_intra_tx_used_flag[INTRA_MODES].
+  // 2 : Limit the intra transform search type to the default transform.
   int fast_intra_tx_type_search;
 
   // INT_MAX: Disable fast search.
@@ -1154,7 +1159,9 @@ typedef struct INTER_MODE_SPEED_FEATURES {
 
   // Prune inter modes based on tpl stats
   // 0 : no pruning
-  // 1 - 3 indicate increasing aggressiveness in order.
+  // 1 : Allow pruning of LAST2 frame
+  // 2 - 4: Allow pruning of all reference frames with increased aggressiveness
+  // of pruning in order
   int prune_inter_modes_based_on_tpl;
 
   // Skip NEARMV and NEAR_NEARMV modes using ref frames of above and left
@@ -1593,7 +1600,14 @@ typedef struct LOOP_FILTER_SPEED_FEATURES {
   // search_switchable()
   int switchable_lr_with_bias_level;
 
-  // prune sgr ep using binary search like mechanism
+  // Enable fast search in self guided restoration
+  // 0 : Search over all 16 SGR projection parameters listed
+  //     in av1_sgr_params[SGRPROJ_PARAMS].
+  // 1 : Approximate search using binary search like mechanism,
+  //     a total of 8 SGR projection parameters are searched.
+  // 2 : Search only 'ep' values in
+  //     sgproj_ep_grp1_seed[SGRPROJ_EP_GRP1_SEARCH_COUNT],
+  //     a total of 4 SGR projection parameters are searched.
   int enable_sgr_ep_pruning;
 
   // Disable loop restoration for Chroma plane
