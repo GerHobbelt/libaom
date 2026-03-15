@@ -636,8 +636,9 @@ static void set_good_speed_features_lc_dec_framesize_dependent(
   if (speed < 1 || speed > 3) return;
 
   const AV1_COMMON *const cm = &cpi->common;
-  const bool is_720p_or_larger = AOMMIN(cm->width, cm->height) >= 720;
   const bool is_between_608p_and_1080p = AOMMIN(cm->width, cm->height) >= 608 &&
+                                         AOMMIN(cm->width, cm->height) <= 1080;
+  const bool is_between_720p_and_1080p = AOMMIN(cm->width, cm->height) >= 720 &&
                                          AOMMIN(cm->width, cm->height) <= 1080;
   const bool is_vertical_video = cm->width < cm->height;
 
@@ -669,20 +670,13 @@ static void set_good_speed_features_lc_dec_framesize_dependent(
   }
 
   // Speed features for regular videos
-  if (!is_vertical_video && is_720p_or_larger) {
+  if (!is_vertical_video && is_between_720p_and_1080p) {
     sf->gm_sf.gm_erroradv_tr_level = 1;
 
     sf->hl_sf.ref_frame_mvs_lvl = 1;
 
-    sf->lpf_sf.dual_sgr_penalty_level = boosted ? 1 : 2;
-    sf->lpf_sf.switchable_lr_with_bias_level = 1;
-    sf->lpf_sf.skip_loop_filter_using_filt_error =
-        (update_type != OVERLAY_UPDATE && update_type != INTNL_OVERLAY_UPDATE &&
-         cpi->common.current_frame.pyramid_level > 1)
-            ? 1
-            : 0;
-
     sf->inter_sf.bias_warp_mode_rd_scale_pct = 4;
+    sf->inter_sf.bias_obmc_mode_rd_scale_pct = 1.5f;
 
     sf->part_sf.split_partition_penalty_level = is_key_frame ? 0 : 2;
 
@@ -774,7 +768,7 @@ static void set_good_speed_feature_framesize_dependent(
 
   if (speed >= 1) {
     sf->part_sf.ml_4_partition_search_level_index = 1;
-    if (is_480p_or_lesser) sf->inter_sf.skip_newmv_in_drl = 1;
+    sf->inter_sf.skip_newmv_in_drl = 1;
 
     if (is_720p_or_larger) {
       sf->part_sf.use_square_partition_only_threshold = BLOCK_128X128;
@@ -1092,7 +1086,6 @@ static void set_good_speed_features_framesize_independent(
   sf->gm_sf.prune_ref_frame_for_gm_search = boosted ? 0 : 1;
   sf->gm_sf.disable_gm_search_based_on_stats = 1;
 
-  sf->part_sf.less_rectangular_check_level = 1;
   sf->part_sf.ml_prune_partition = 1;
   sf->part_sf.prune_ext_partition_types_search_level = 1;
   sf->part_sf.prune_part4_search = 2;
@@ -1115,6 +1108,7 @@ static void set_good_speed_features_framesize_independent(
   sf->inter_sf.reduce_inter_modes = boosted ? 1 : 2;
   sf->inter_sf.selective_ref_frame = 1;
   sf->inter_sf.use_dist_wtd_comp_flag = DIST_WTD_COMP_SKIP_MV_SEARCH;
+  sf->inter_sf.enable_fast_compound_mode_search = 1;
 
   sf->interp_sf.use_fast_interpolation_filter_search = 1;
   sf->interp_sf.disable_dual_filter = 1;
@@ -1178,7 +1172,6 @@ static void set_good_speed_features_framesize_independent(
     sf->inter_sf.skip_arf_compound = 1;
     sf->inter_sf.prune_comp_using_best_single_mode_ref = 2;
     sf->inter_sf.use_dist_wtd_comp_flag = DIST_WTD_COMP_DISABLED;
-    sf->inter_sf.enable_fast_compound_mode_search = 1;
 
     sf->interp_sf.use_interp_filter = 1;
 
@@ -1265,7 +1258,6 @@ static void set_good_speed_features_framesize_independent(
     sf->gm_sf.prune_zero_mv_with_sse = 1;
     sf->gm_sf.num_refinement_steps = 0;
 
-    sf->part_sf.less_rectangular_check_level = 2;
     sf->part_sf.simple_motion_search_prune_agg =
         allow_screen_content_tools
             ? SIMPLE_AGG_LVL0
@@ -1309,7 +1301,6 @@ static void set_good_speed_features_framesize_independent(
     sf->tpl_sf.prune_intra_modes = 1;
     sf->tpl_sf.reduce_first_step_size = 6;
     sf->tpl_sf.subpel_force_stop = QUARTER_PEL;
-    sf->tpl_sf.gop_length_decision_method = 1;
 
     sf->tx_sf.adaptive_txb_search_level = boosted ? 2 : 3;
     sf->tx_sf.tx_type_search.use_skip_flag_prediction = 2;
@@ -2196,7 +2187,7 @@ static inline void init_fp_sf(FIRST_PASS_SPEED_FEATURES *fp_sf) {
 }
 
 static inline void init_tpl_sf(TPL_SPEED_FEATURES *tpl_sf) {
-  tpl_sf->gop_length_decision_method = 0;
+  tpl_sf->gop_length_decision_method = 1;
   tpl_sf->prune_intra_modes = 0;
   tpl_sf->prune_starting_mv = 0;
   tpl_sf->reduce_first_step_size = 0;
@@ -2791,28 +2782,12 @@ static void set_good_speed_features_lc_dec_qindex_dependent(
   const AV1_COMMON *const cm = &cpi->common;
   const bool is_between_608p_and_1080p = AOMMIN(cm->width, cm->height) >= 608 &&
                                          AOMMIN(cm->width, cm->height) <= 1080;
-  const bool is_720p_or_larger = AOMMIN(cm->width, cm->height) >= 720;
   const bool is_vertical_video = cm->width < cm->height;
-  const FRAME_UPDATE_TYPE update_type =
-      get_frame_update_type(&cpi->ppi->gf_group, cpi->gf_frame_index);
-  const bool leaf_and_overlay_frames =
-      (update_type == LF_UPDATE || update_type == OVERLAY_UPDATE ||
-       update_type == INTNL_OVERLAY_UPDATE);
 
   // Speed features for vertical videos
   if (is_vertical_video && is_between_608p_and_1080p) {
     sf->lpf_sf.min_lr_unit_size = RESTORATION_UNITSIZE_MAX >> 1;
     sf->lpf_sf.max_lr_unit_size = RESTORATION_UNITSIZE_MAX >> 1;
-  }
-
-  // Speed features for regular videos
-  if (!is_vertical_video && is_720p_or_larger) {
-    if (speed <= 2 && leaf_and_overlay_frames) {
-      // For 720p and above, only enable this feature for leaf and overlay
-      // frames to avoid quality degradation on ARF frames.
-      sf->lpf_sf.min_lr_unit_size = RESTORATION_UNITSIZE_MAX >> 1;
-      sf->lpf_sf.max_lr_unit_size = RESTORATION_UNITSIZE_MAX >> 1;
-    }
   }
 }
 
@@ -2918,9 +2893,9 @@ void av1_set_speed_features_qindex_dependent(AV1_COMP *cpi, int speed) {
     }
   }
 
-  if (speed >= 4) {
+  if (speed >= 3) {
     // Disable rectangular partitions for lower quantizers
-    const int aggr = AOMMIN(1, speed - 4);
+    const int aggr = (speed <= 4) ? 0 : 1;
     const int qindex_thresh[2] = { 65, 80 };
     int disable_rect_part;
     disable_rect_part = !boosted;
@@ -2947,7 +2922,12 @@ void av1_set_speed_features_qindex_dependent(AV1_COMP *cpi, int speed) {
         sf->mv_sf.search_method = NSTEP_8PT;
       }
     }
+    sf->part_sf.less_rectangular_check_level = 1;
   }
+
+  if (speed == 3)
+    sf->part_sf.less_rectangular_check_level =
+        (cm->quant_params.base_qindex >= 170) ? 1 : 2;
 
   if (speed >= 4) {
     // Disable LR search at low and high quantizers and enable only for
@@ -2961,6 +2941,7 @@ void av1_set_speed_features_qindex_dependent(AV1_COMP *cpi, int speed) {
         sf->lpf_sf.disable_wiener_coeff_refine_search = true;
       }
     }
+    sf->part_sf.less_rectangular_check_level = 2;
   }
 
   if (speed == 1) {

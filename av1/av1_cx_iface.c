@@ -12,6 +12,7 @@
 #include <assert.h>
 #include <limits.h>
 #include <math.h>
+#include <setjmp.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -850,7 +851,7 @@ static aom_codec_err_t validate_config(aom_codec_alg_priv_t *ctx,
   }
 
   if (cfg->rc_end_usage == AOM_Q) {
-    RANGE_CHECK_HI(cfg, use_fixed_qp_offsets, 1);
+    RANGE_CHECK_HI(cfg, use_fixed_qp_offsets, 2);
   } else {
     if (cfg->use_fixed_qp_offsets > 0) {
       ERROR("--use_fixed_qp_offsets can only be used with --end-usage=q");
@@ -1290,7 +1291,8 @@ static void set_encoder_config(AV1EncoderConfig *oxcf,
   q_cfg->deltaq_mode = extra_cfg->deltaq_mode;
   q_cfg->deltaq_strength = extra_cfg->deltaq_strength;
   q_cfg->use_fixed_qp_offsets =
-      cfg->use_fixed_qp_offsets && (rc_cfg->mode == AOM_Q);
+      (rc_cfg->mode == AOM_Q) ? cfg->use_fixed_qp_offsets : 0;
+
   q_cfg->enable_hdr_deltaq =
       (q_cfg->deltaq_mode == DELTA_Q_HDR) &&
       (cfg->g_bit_depth == AOM_BITS_10) &&
@@ -1371,7 +1373,7 @@ static void set_encoder_config(AV1EncoderConfig *oxcf,
   // 608p and 720p. This can be further modified if needed.
   const int is_low_complexity_decode_mode_supported =
       (cfg->g_usage == AOM_USAGE_GOOD_QUALITY) &&
-      (oxcf->speed >= 1 && oxcf->speed <= 3) && (cfg->g_w < cfg->g_h) &&
+      (oxcf->speed >= 1 && oxcf->speed <= 3) &&
       (AOMMIN(cfg->g_w, cfg->g_h) >= 608 && AOMMIN(cfg->g_w, cfg->g_h) <= 1080);
   oxcf->enable_low_complexity_decode =
       extra_cfg->enable_low_complexity_decode &&
@@ -1386,6 +1388,8 @@ static void set_encoder_config(AV1EncoderConfig *oxcf,
 
   // Set Group of frames configuration.
 #if CONFIG_REALTIME_ONLY
+  // When CONFIG_REALTIMIE_ONLY=1 and mode=REALTIME, then force lag_in_frames
+  // = 0.
   gf_cfg->lag_in_frames = (oxcf->mode == REALTIME)
                               ? 0
                               : clamp(cfg->g_lag_in_frames, 0, MAX_LAG_BUFFERS);
@@ -1726,6 +1730,11 @@ static aom_codec_err_t ctrl_get_baseline_gf_interval(aom_codec_alg_priv_t *ctx,
 }
 
 static aom_codec_err_t update_encoder_cfg(aom_codec_alg_priv_t *ctx) {
+  // Disable denoiser for spatial layers. Bug: 485332522.
+  // TODO: bug 485332522 - Disable denoiser for spatial layers until
+  // more testing is done
+  if (ctx->ppi->cpi->svc.number_spatial_layers > 1)
+    ctx->extra_cfg.noise_sensitivity = 0;
   set_encoder_config(&ctx->oxcf, &ctx->cfg, &ctx->extra_cfg);
   av1_check_fpmt_config(ctx->ppi, &ctx->oxcf);
   bool is_sb_size_changed = false;
@@ -1923,8 +1932,6 @@ static aom_codec_err_t handle_tuning(aom_codec_alg_priv_t *ctx,
     extra_cfg->enable_chroma_deltaq = 1;
     // Enable "Variance Boost" deltaq mode, optimized for images.
     extra_cfg->deltaq_mode = DELTA_Q_VARIANCE_BOOST;
-    // Enable "anti-aliased text and graphics aware" screen detection mode.
-    extra_cfg->screen_detection_mode = AOM_SCREEN_DETECTION_ANTIALIASING_AWARE;
   }
   if (extra_cfg->tuning == AOM_TUNE_IQ) {
     // Enable adaptive sharpness to adjust loop filter levels according to QP.
@@ -3012,14 +3019,20 @@ static aom_codec_err_t encoder_init(aom_codec_ctx_t *ctx) {
 
     priv->extra_cfg = default_extra_cfg;
     // Special handling:
-    // By default, if omitted: --enable-cdef=1, --qm-min=5, and --qm-max=9
-    // Here we set its default values to 0, 4, and 10 respectively when
-    // --allintra is turned on.
-    // However, if users set --enable-cdef, --qm-min, or --qm-max, either from
-    // the command line or aom_codec_control(), the encoder still respects it.
+    // By default, if omitted: --enable-cdef=1, --screen-detection-mode=1,
+    // --qm-min=5, and --qm-max=9.
+    // Here we set its default values to --enable-cdef=0,
+    // --screen-detection-mode=2, --qm-min=4, and --qm-max=10 when --allintra
+    // is turned on.
+    // However, if users set --enable-cdef, --screen-detection-mode, --qm-min,
+    // or --qm-max, either from the command line or aom_codec_control(), the
+    // encoder still respects it.
     if (priv->cfg.g_usage == AOM_USAGE_ALL_INTRA) {
       // CDEF has been found to blur images, so it's disabled in all-intra mode
       priv->extra_cfg.enable_cdef = 0;
+      // Enable "anti-aliased text and graphics aware" screen detection mode.
+      priv->extra_cfg.screen_detection_mode =
+          AOM_SCREEN_DETECTION_ANTIALIASING_AWARE;
       // These QM min/max values have been found to be beneficial for images,
       // when used with an alternative QM formula (see
       // aom_get_qmlevel_allintra()).
@@ -3044,10 +3057,16 @@ static aom_codec_err_t encoder_init(aom_codec_ctx_t *ctx) {
       set_encoder_config(&priv->oxcf, &priv->cfg, &priv->extra_cfg);
       if (priv->oxcf.pass == AOM_RC_ONE_PASS) {
         // Enable look ahead.
-        *num_lap_buffers =
-            AOMMIN((int)priv->cfg.g_lag_in_frames,
-                   AOMMIN(MAX_LAP_BUFFERS, priv->oxcf.kf_cfg.key_freq_max +
-                                               SCENE_CUT_KEY_TEST_INTERVAL));
+        *num_lap_buffers = AOMMIN(
+#if CONFIG_REALTIME_ONLY
+            // When CONFIG_REALTIMIE_ONLY=1 and mode=REALTIME, then force
+            // lag_in_frames = 0.
+            (priv->oxcf.mode == REALTIME) ? 0 : (int)priv->cfg.g_lag_in_frames,
+#else
+            (int)priv->cfg.g_lag_in_frames,
+#endif
+            AOMMIN(MAX_LAP_BUFFERS, priv->oxcf.kf_cfg.key_freq_max +
+                                        SCENE_CUT_KEY_TEST_INTERVAL));
         if ((int)priv->cfg.g_lag_in_frames - (*num_lap_buffers) >=
             LAP_LAG_IN_FRAMES) {
           lap_lag_in_frames = LAP_LAG_IN_FRAMES;
