@@ -620,6 +620,10 @@ typedef struct {
    * CBR mode.
    */
   int max_consec_drop_ms;
+  /*!
+   * Force to allow the usage of maximum q in vbr mode.
+   */
+  int force_max_q;
 } RateControlCfg;
 
 /*!\cond */
@@ -881,6 +885,12 @@ typedef struct {
    * on reconstructed frame.
    */
   bool skip_postproc_filtering;
+
+  /*!
+   * Indicates if mode and reference frame delta should be enabled during
+   * loopfiltering.
+   */
+  int mode_ref_delta_enabled;
 
   /*!
    * Controls screen content detection mode
@@ -3519,11 +3529,6 @@ typedef struct AV1_COMP {
   int sb_counter;
 
   /*!
-   * Available bitstream buffer size in bytes
-   */
-  size_t available_bs_size;
-
-  /*!
    * The controller of the external partition model.
    * It is used to do partition type selection based on external models.
    */
@@ -4148,7 +4153,7 @@ static inline int is_stat_consumption_stage(const AV1_COMP *const cpi) {
 
 // Decide whether 'dv_costs' need to be allocated/stored during the encoding.
 static inline bool av1_need_dv_costs(const AV1_COMP *const cpi) {
-  return !cpi->sf.rt_sf.use_nonrd_pick_mode &&
+  return (!cpi->sf.rt_sf.use_nonrd_pick_mode || cpi->sf.rt_sf.rt_use_intrabc) &&
          av1_allow_intrabc(&cpi->common) && !is_stat_generation_stage(cpi);
 }
 
@@ -4517,6 +4522,13 @@ static inline int get_lpf_opt_level(const SPEED_FEATURES *sf) {
 static inline bool is_switchable_motion_mode_allowed(bool allow_warped_motion,
                                                      bool enable_obmc) {
   return (allow_warped_motion || enable_obmc);
+}
+
+static inline int warped_motion_update_num_proj_ref(
+    const struct AV1_COMP *const cpi, const MB_MODE_INFO *const mi) {
+  return cpi->oxcf.motion_mode_cfg.allow_warped_motion && is_inter_block(mi) &&
+         !mi->skip_mode && is_motion_variation_allowed_bsize(mi->bsize) &&
+         !has_second_ref(mi);
 }
 
 #if CONFIG_AV1_TEMPORAL_DENOISING

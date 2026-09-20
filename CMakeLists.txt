@@ -23,7 +23,7 @@ endif()
 
 # VERSION is the release version of the library. It should be updated at the
 # same time as the LT_* variables.
-project(AOM LANGUAGES C CXX VERSION 3.14.0)
+project(AOM LANGUAGES C CXX VERSION 3.14.1)
 
 # GENERATED source property global visibility.
 if(POLICY CMP0118)
@@ -59,7 +59,7 @@ endif()
 #
 # The VERSION number in project() should be updated when these variables are.
 set(LT_CURRENT 17)
-set(LT_REVISION 0)
+set(LT_REVISION 1)
 set(LT_AGE 14)
 math(EXPR SO_VERSION "${LT_CURRENT} - ${LT_AGE}")
 set(SO_FILE_VERSION "${SO_VERSION}.${LT_AGE}.${LT_REVISION}")
@@ -305,6 +305,7 @@ if(CONFIG_HIGHWAY)
               "${AOM_ROOT}/third_party/highway/hwy/contrib/math/math-inl.h")
   add_definitions(-DHWY_HEADER_ONLY)
   add_library(aom_hwy OBJECT ${AOM_HIGHWAY_SOURCES})
+  set_target_properties(aom_hwy PROPERTIES LINKER_LANGUAGE CXX)
   set(AOM_LIB_TARGETS ${AOM_LIB_TARGETS} aom_hwy)
 endif()
 

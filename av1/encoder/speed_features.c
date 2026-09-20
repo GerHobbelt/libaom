@@ -641,6 +641,7 @@ static void set_good_speed_features_lc_dec_framesize_dependent(
         (update_type == LF_UPDATE || update_type == OVERLAY_UPDATE ||
          update_type == INTNL_OVERLAY_UPDATE);
     if (leaf_and_overlay_frames) sf->gm_sf.gm_search_type = GM_DISABLE_SEARCH;
+    sf->gm_sf.gm_erroradv_tr_level = 1;
 
     sf->hl_sf.ref_frame_mvs_lvl = 2;
 
@@ -665,11 +666,12 @@ static void set_good_speed_features_lc_dec_framesize_dependent(
 
   // Speed features for regular videos
   if (!is_vertical_video && is_between_720p_and_1080p) {
-    sf->gm_sf.gm_erroradv_tr_level = 1;
+    sf->gm_sf.gm_erroradv_tr_level = 2;
 
     sf->hl_sf.ref_frame_mvs_lvl = 1;
 
     sf->lpf_sf.adaptive_cdef_mode = 1;
+    sf->lpf_sf.dual_sgr_penalty_level = boosted ? 1 : 3;
     sf->lpf_sf.skip_loop_filter_using_filt_error =
         (update_type != OVERLAY_UPDATE && update_type != INTNL_OVERLAY_UPDATE &&
          cm->current_frame.pyramid_level > 1)
@@ -1133,6 +1135,7 @@ static void set_good_speed_features_framesize_independent(
   sf->inter_sf.selective_ref_frame = 1;
   sf->inter_sf.use_dist_wtd_comp_flag = DIST_WTD_COMP_SKIP_MV_SEARCH;
   sf->inter_sf.enable_fast_compound_mode_search = 1;
+  sf->inter_sf.prune_inter_modes_based_on_tpl = 1;
 
   sf->interp_sf.use_fast_interpolation_filter_search = 1;
   sf->interp_sf.disable_dual_filter = 1;
@@ -1198,9 +1201,9 @@ static void set_good_speed_features_framesize_independent(
     sf->inter_sf.skip_arf_compound = 1;
     sf->inter_sf.prune_comp_using_best_single_mode_ref = 2;
     sf->inter_sf.use_dist_wtd_comp_flag = DIST_WTD_COMP_DISABLED;
-    sf->inter_sf.prune_inter_modes_based_on_tpl = 1;
 
     sf->interp_sf.use_interp_filter = 1;
+    sf->interp_sf.skip_model_rd_uv = 1;
 
     sf->intra_sf.prune_palette_search_level = 1;
 
@@ -1320,7 +1323,6 @@ static void set_good_speed_features_framesize_independent(
     sf->inter_sf.prune_single_ref = 2;
 
     sf->interp_sf.adaptive_interp_filter_search = 2;
-    sf->interp_sf.skip_model_rd_uv = 1;
 
     // TODO(chiyotsai@google.com): the thresholds chosen for intra hog are
     // inherited directly from luma hog with some minor tweaking. Eventually we
@@ -1760,7 +1762,7 @@ static void set_rt_speed_feature_framesize_dependent(const AV1_COMP *const cpi,
   }
   // Screen settings.
   if (cpi->oxcf.tune_cfg.content == AOM_CONTENT_SCREEN) {
-    // TODO(marpan): Check settings for speed 7 and 8.
+    if (speed < 7) sf->rt_sf.rt_use_intrabc = 1;
     if (speed >= 7) {
       sf->rt_sf.reduce_mv_pel_precision_highmotion = 0;
       sf->mv_sf.use_bsize_dependent_search_method = 0;
@@ -2618,6 +2620,7 @@ static inline void init_rt_sf(REAL_TIME_SPEED_FEATURES *rt_sf) {
   rt_sf->check_globalmv_on_single_ref = true;
   rt_sf->increase_color_thresh_palette = false;
   rt_sf->selective_cdf_update = 0;
+  rt_sf->rt_use_intrabc = 0;
   rt_sf->force_only_last_ref = 0;
   rt_sf->higher_thresh_scene_detection = 1;
   rt_sf->skip_newmv_flat_blocks_screen = 0;

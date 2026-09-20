@@ -3430,7 +3430,8 @@ static int64_t rd_pick_intrabc_mode_sb(const AV1_COMP *cpi, MACROBLOCK *x,
                                        int64_t best_rd) {
   const AV1_COMMON *const cm = &cpi->common;
   if (!av1_allow_intrabc(cm) || !cpi->oxcf.kf_cfg.enable_intrabc ||
-      !cpi->sf.mv_sf.use_intrabc || cpi->sf.rt_sf.use_nonrd_pick_mode)
+      !cpi->sf.mv_sf.use_intrabc ||
+      (cpi->sf.rt_sf.use_nonrd_pick_mode && !cpi->sf.rt_sf.rt_use_intrabc))
     return INT64_MAX;
   if (cpi->sf.mv_sf.intrabc_search_level >= 1 && bsize != BLOCK_4X4 &&
       bsize != BLOCK_8X8 && bsize != BLOCK_16X16) {
@@ -4114,7 +4115,13 @@ static inline void init_mode_skip_mask(mode_skip_mask_t *mask,
     for (int r_idx = 0; r_idx < num_rt_refs; r_idx++) {
       const MV_REFERENCE_FRAME ref = real_time_ref_combos[r_idx][0];
       if (ref != INTRA_FRAME) {
-        min_pred_mv_sad = AOMMIN(min_pred_mv_sad, x->pred_mv_sad[ref]);
+        const MV_REFERENCE_FRAME ref_frames[2] = { ref, NONE_FRAME };
+        const int_mv ref_mv =
+            av1_get_ref_mv_from_stack(0, ref_frames, 0, &x->mbmi_ext);
+        const FULLPEL_MV full_mv = get_fullmv_from_mv(&ref_mv.as_mv);
+        if (av1_is_fullmv_in_range(&x->mv_limits, full_mv)) {
+          min_pred_mv_sad = AOMMIN(min_pred_mv_sad, x->pred_mv_sad[ref]);
+        }
       }
     }
   } else {

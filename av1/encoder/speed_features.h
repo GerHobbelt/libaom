@@ -616,7 +616,8 @@ typedef struct GLOBAL_MOTION_SPEED_FEATURES {
   int num_refinement_steps;
 
   // Error advantage threshold level used to determine whether global motion
-  // compensation should be enabled
+  // compensation should be enabled. It Can take values 0 - 2 increasing
+  // aggressiveness of skipping GM in order.
   int gm_erroradv_tr_level;
 } GLOBAL_MOTION_SPEED_FEATURES;
 
@@ -1841,6 +1842,8 @@ typedef struct REAL_TIME_SPEED_FEATURES {
 
   // Force selective cdf update.
   int selective_cdf_update;
+  // Use IntraBC for realtime mode.
+  int rt_use_intrabc;
 
   // Force only single reference (LAST) for prediction.
   int force_only_last_ref;
