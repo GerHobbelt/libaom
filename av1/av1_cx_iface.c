@@ -246,6 +246,7 @@ struct av1_extracfg {
   int kf_max_pyr_height;
   int sb_qp_sweep;
   aom_screen_detection_mode screen_detection_mode;
+  unsigned int validate_hbd_input;
 };
 
 #if !CONFIG_REALTIME_ONLY
@@ -402,6 +403,7 @@ static const struct av1_extracfg default_extra_cfg = {
   -1,              // kf_max_pyr_height
   0,               // sb_qp_sweep
   AOM_SCREEN_DETECTION_STANDARD,
+  1,  // validate_hbd_input
 };
 #else
 // Some settings are changed for realtime only build.
@@ -558,6 +560,7 @@ static const struct av1_extracfg default_extra_cfg = {
   -1,              // kf_max_pyr_height
   0,               // sb_qp_sweep
   AOM_SCREEN_DETECTION_STANDARD,
+  1,  // validate_hbd_input
 };
 #endif
 
@@ -1017,6 +1020,31 @@ static aom_codec_err_t validate_img(aom_codec_alg_priv_t *ctx,
   }
 #endif
 
+#if CONFIG_AV1_HIGHBITDEPTH
+  if (ctx->extra_cfg.validate_hbd_input &&
+      (img->fmt & AOM_IMG_FMT_HIGHBITDEPTH)) {
+    const unsigned int bit_depth = ctx->oxcf.input_cfg.input_bit_depth;
+    const int max_val = 1 << bit_depth;
+    // Note there is no high bitdepth version of NV12 defined. If one is
+    // added, `num_planes` should be 2 in that case.
+    const int num_planes = img->monochrome ? 1 : 3;
+    for (int plane = 0; plane < num_planes; ++plane) {
+      const unsigned short *src = (const unsigned short *)img->planes[plane];
+      const unsigned int stride = img->stride[plane] / 2;
+      const unsigned int ph = aom_img_plane_height(img, plane);
+      const unsigned int pw = aom_img_plane_width(img, plane);
+      for (unsigned int i = 0; i < ph; ++i) {
+        for (unsigned int j = 0; j < pw; ++j) {
+          if (src[j] >= max_val) {
+            return AOM_CODEC_INVALID_PARAM;
+          }
+        }
+        src += stride;
+      }
+    }
+  }
+#endif  // CONFIG_AV1_HIGHBITDEPTH
+
   return AOM_CODEC_OK;
 }
 
@@ -1359,16 +1387,19 @@ static void set_encoder_config(AV1EncoderConfig *oxcf,
   kf_cfg->enable_intrabc = extra_cfg->enable_intrabc;
 
   oxcf->speed = extra_cfg->cpu_used;
-  // TODO(yunqingwang, any) In REALTIME mode, 1080p performance at speed 5 & 6
-  // is quite bad. Force to use speed 7 for now. Will investigate it when we
-  // work on rd path optimization later.
-  if (oxcf->mode == REALTIME && AOMMIN(cfg->g_w, cfg->g_h) >= 1080 &&
-      oxcf->speed < 7)
-    oxcf->speed = 7;
+  if (oxcf->mode == REALTIME) {
+#if CONFIG_REALTIME_ONLY
+    oxcf->speed = AOMMAX(oxcf->speed, 5);
+#endif
+    // TODO(yunqingwang, any) In REALTIME mode, 1080p performance at speed 5 & 6
+    // is quite bad. Force to use speed 7 for now. Will investigate it when we
+    // work on rd path optimization later.
+    if (AOMMIN(cfg->g_w, cfg->g_h) >= 1080 && oxcf->speed < 7) oxcf->speed = 7;
+  }
 
-  // Now, low complexity decode mode is only supported for good-quality
-  // encoding speed 1 to 3 and for vertical videos with a resolution between
-  // 608p and 720p. This can be further modified if needed.
+  // Now, low complexity decode mode supports good-quality encoding (speed 1 to
+  // 3) for vertical videos (608p to 1080p) and horizontal videos (720p to
+  // 1080p). This can be further modified if needed.
   const int is_low_complexity_decode_mode_supported =
       (cfg->g_usage == AOM_USAGE_GOOD_QUALITY) &&
       (oxcf->speed >= 1 && oxcf->speed <= 3) &&
@@ -1881,6 +1912,13 @@ static aom_codec_err_t ctrl_set_enable_keyframe_filtering(
   struct av1_extracfg extra_cfg = ctx->extra_cfg;
   extra_cfg.enable_keyframe_filtering =
       CAST(AV1E_SET_ENABLE_KEYFRAME_FILTERING, args);
+  return update_extra_cfg(ctx, &extra_cfg);
+}
+
+static aom_codec_err_t ctrl_set_validate_hbd_input(aom_codec_alg_priv_t *ctx,
+                                                   va_list args) {
+  struct av1_extracfg extra_cfg = ctx->extra_cfg;
+  extra_cfg.validate_hbd_input = CAST(AOME_SET_VALIDATE_HBD_INPUT, args);
   return update_extra_cfg(ctx, &extra_cfg);
 }
 
@@ -3999,7 +4037,8 @@ static aom_codec_err_t ctrl_set_scale_mode(aom_codec_alg_priv_t *ctx,
 static aom_codec_err_t ctrl_set_spatial_layer_id(aom_codec_alg_priv_t *ctx,
                                                  va_list args) {
   const int spatial_layer_id = va_arg(args, int);
-  if (spatial_layer_id >= MAX_NUM_SPATIAL_LAYERS)
+  if (spatial_layer_id < 0 ||
+      spatial_layer_id >= (int)ctx->ppi->number_spatial_layers)
     return AOM_CODEC_INVALID_PARAM;
   ctx->ppi->cpi->common.spatial_layer_id = spatial_layer_id;
   return AOM_CODEC_OK;
@@ -4029,6 +4068,11 @@ static aom_codec_err_t ctrl_set_number_spatial_layers(aom_codec_alg_priv_t *ctx,
 static aom_codec_err_t ctrl_set_layer_id(aom_codec_alg_priv_t *ctx,
                                          va_list args) {
   aom_svc_layer_id_t *const data = va_arg(args, aom_svc_layer_id_t *);
+  if (data->spatial_layer_id < 0 || data->temporal_layer_id < 0 ||
+      data->spatial_layer_id >= (int)ctx->ppi->number_spatial_layers ||
+      data->temporal_layer_id >= (int)ctx->ppi->number_temporal_layers) {
+    return AOM_CODEC_INVALID_PARAM;
+  }
   ctx->ppi->cpi->common.spatial_layer_id = data->spatial_layer_id;
   ctx->ppi->cpi->common.temporal_layer_id = data->temporal_layer_id;
   ctx->ppi->cpi->svc.spatial_layer_id = data->spatial_layer_id;
@@ -4107,8 +4151,14 @@ static aom_codec_err_t ctrl_set_svc_params(aom_codec_alg_priv_t *ctx,
         LAYER_CONTEXT *lc = &cpi->svc.layer_context[layer];
         lc->max_q = params->max_quantizers[layer];
         lc->min_q = params->min_quantizers[layer];
-        lc->scaling_factor_num = AOMMAX(1, params->scaling_factor_num[sl]);
-        lc->scaling_factor_den = AOMMAX(1, params->scaling_factor_den[sl]);
+        // spatial scaling (scaling_factor_num[]/den[]) is always to a lower
+        // resolution, so den must be >= num.
+        if (params->scaling_factor_den[sl] < params->scaling_factor_num[sl]) {
+          return AOM_CODEC_INVALID_PARAM;
+        } else {
+          lc->scaling_factor_num = AOMMAX(1, params->scaling_factor_num[sl]);
+          lc->scaling_factor_den = AOMMAX(1, params->scaling_factor_den[sl]);
+        }
         const int layer_target_bitrate = params->layer_target_bitrate[layer];
         if (layer_target_bitrate > INT_MAX / 1000) {
           lc->layer_target_bitrate = INT_MAX;
@@ -4797,6 +4847,9 @@ static aom_codec_err_t encoder_set_option(aom_codec_alg_priv_t *ctx,
   } else if (arg_match_helper(&arg, &g_av1_codec_arg_defs.screen_detection_mode,
                               argv, err_string)) {
     extra_cfg.screen_detection_mode = arg_parse_int_helper(&arg, err_string);
+  } else if (arg_match_helper(&arg, &g_av1_codec_arg_defs.validate_hbd_input,
+                              argv, err_string)) {
+    extra_cfg.validate_hbd_input = arg_parse_int_helper(&arg, err_string);
   } else {
     match = 0;
     snprintf(err_string, ARG_ERR_MSG_MAX_LEN, "Cannot find aom option %s",
@@ -5021,6 +5074,7 @@ static aom_codec_ctrl_fn_map_t encoder_ctrl_maps[] = {
     ctrl_set_screen_content_detection_mode },
   { AV1E_SET_ENABLE_ADAPTIVE_SHARPNESS, ctrl_set_enable_adaptive_sharpness },
   { AV1E_SET_EXTERNAL_RATE_CONTROL, ctrl_set_external_rate_control },
+  { AOME_SET_VALIDATE_HBD_INPUT, ctrl_set_validate_hbd_input },
 
   // Getters
   { AOME_GET_LAST_QUANTIZER, ctrl_get_quantizer },
