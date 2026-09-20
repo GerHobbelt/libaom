@@ -768,7 +768,7 @@ typedef struct {
 typedef struct {
   // Indicates the framerate of the input video.
   double init_framerate;
-  // Indicates the bit-depth of the input video.
+  // Indicates the actual bit-depth of the input source.
   unsigned int input_bit_depth;
   // Indicates the maximum number of frames to be encoded.
   unsigned int limit;
@@ -3003,6 +3003,11 @@ typedef struct AV1_COMP {
    * Skip tpl setup when tpl data from gop length decision can be reused.
    */
   int skip_tpl_setup_stats;
+
+  /*!
+   * Flag to indicate if RD multiplier modulation is enabled.
+   */
+  int cb_delta_rdmult_enabled;
 
   /*!
    * Scaling factors used in the RD multiplier modulation.

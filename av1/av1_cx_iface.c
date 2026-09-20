@@ -802,6 +802,8 @@ static aom_codec_err_t validate_config(aom_codec_alg_priv_t *ctx,
   RANGE_CHECK_HI(extra_cfg, cq_level, 63);
   RANGE_CHECK(cfg, g_bit_depth, AOM_BITS_8, AOM_BITS_12);
   RANGE_CHECK(cfg, g_input_bit_depth, 8, 12);
+  if (cfg->g_input_bit_depth > (unsigned int)cfg->g_bit_depth)
+    ERROR("Input bit-depth must not exceed codec bit-depth");
   RANGE_CHECK(extra_cfg, content, AOM_CONTENT_DEFAULT, AOM_CONTENT_INVALID - 1);
 
   if (cfg->g_pass >= AOM_RC_SECOND_PASS) {
@@ -841,10 +843,6 @@ static aom_codec_err_t validate_config(aom_codec_alg_priv_t *ctx,
   if (cfg->g_profile <= (unsigned int)PROFILE_1 &&
       cfg->g_bit_depth > AOM_BITS_10) {
     ERROR("Codec bit-depth 12 not supported in profile < 2");
-  }
-  if (cfg->g_profile <= (unsigned int)PROFILE_1 &&
-      cfg->g_input_bit_depth > 10) {
-    ERROR("Source bit-depth 12 not supported in profile < 2");
   }
 
   if (cfg->rc_end_usage == AOM_Q) {
@@ -1001,7 +999,9 @@ static aom_codec_err_t validate_img(aom_codec_alg_priv_t *ctx,
   // If matrix_coefficients is equal to MC_IDENTITY, it is a requirement of
   // bitstream conformance that subsampling_x is equal to 0 and subsampling_y
   // is equal to 0.
-  if (ctx->oxcf.color_cfg.matrix_coefficients == AOM_CICP_MC_IDENTITY &&
+  const aom_matrix_coefficients_t matrix_coefficients =
+      ctx->extra_cfg.matrix_coefficients;
+  if (matrix_coefficients == AOM_CICP_MC_IDENTITY &&
       (img->x_chroma_shift != 0 || img->y_chroma_shift != 0)) {
     ERROR("Subsampling must be 0 with AOM_CICP_MC_IDENTITY.");
   }
@@ -1011,8 +1011,10 @@ static aom_codec_err_t validate_img(aom_codec_alg_priv_t *ctx,
     if (img->bit_depth > 8) {
       ERROR("Only 8 bit depth images supported in tune=butteraugli mode.");
     }
-    if (img->mc != 0 && img->mc != AOM_CICP_MC_BT_709 &&
-        img->mc != AOM_CICP_MC_BT_601 && img->mc != AOM_CICP_MC_BT_470_B_G) {
+    if (matrix_coefficients != AOM_CICP_MC_IDENTITY &&
+        matrix_coefficients != AOM_CICP_MC_BT_709 &&
+        matrix_coefficients != AOM_CICP_MC_BT_601 &&
+        matrix_coefficients != AOM_CICP_MC_BT_470_B_G) {
       ERROR(
           "Only BT.709 and BT.601 matrix coefficients supported in "
           "tune=butteraugli mode. Identity matrix is treated as BT.601.");
@@ -1023,20 +1025,21 @@ static aom_codec_err_t validate_img(aom_codec_alg_priv_t *ctx,
 #if CONFIG_AV1_HIGHBITDEPTH
   if (ctx->extra_cfg.validate_hbd_input &&
       (img->fmt & AOM_IMG_FMT_HIGHBITDEPTH)) {
-    const unsigned int bit_depth = ctx->oxcf.input_cfg.input_bit_depth;
+    const unsigned int bit_depth = ctx->cfg.g_bit_depth;
     const int max_val = 1 << bit_depth;
     // Note there is no high bitdepth version of NV12 defined. If one is
     // added, `num_planes` should be 2 in that case.
-    const int num_planes = img->monochrome ? 1 : 3;
+    const int num_planes = ctx->cfg.monochrome ? 1 : 3;
     for (int plane = 0; plane < num_planes; ++plane) {
       const unsigned short *src = (const unsigned short *)img->planes[plane];
+      if (!src) return AOM_CODEC_INVALID_PARAM;
       const unsigned int stride = img->stride[plane] / 2;
       const unsigned int ph = aom_img_plane_height(img, plane);
       const unsigned int pw = aom_img_plane_width(img, plane);
       for (unsigned int i = 0; i < ph; ++i) {
         for (unsigned int j = 0; j < pw; ++j) {
           if (src[j] >= max_val) {
-            return AOM_CODEC_INVALID_PARAM;
+            ERROR("Input pixel value out of range for encoder bit depth");
           }
         }
         src += stride;
@@ -3368,8 +3371,6 @@ static aom_codec_err_t encoder_encode(aom_codec_alg_priv_t *ctx,
   if (ppi->use_svc && ppi->cpi->svc.use_flexible_mode == 0 && flags == 0)
     av1_set_svc_fixed_mode(ppi->cpi);
 
-  ppi->b_freeze_internal_state = flags & AOM_EFLAG_FREEZE_INTERNAL_STATE;
-
   // Note(yunqing): While applying encoding flags, always start from enabling
   // all, and then modifying according to the flags. Previous frame's flags are
   // overwritten.
@@ -3425,6 +3426,9 @@ static aom_codec_err_t encoder_encode(aom_codec_alg_priv_t *ctx,
     ppi->b_calculate_psnr = (ctx->base.init_flags & AOM_CODEC_USE_PSNR) ||
                             (flags & AOM_EFLAG_CALCULATE_PSNR);
 #endif  // CONFIG_INTERNAL_STATS
+
+    ppi->b_freeze_internal_state =
+        (flags & AOM_EFLAG_FREEZE_INTERNAL_STATE) != 0;
 
     if (img != NULL) {
       if (!ctx->pts_offset_initialized) {
@@ -4080,6 +4084,14 @@ static aom_codec_err_t ctrl_set_layer_id(aom_codec_alg_priv_t *ctx,
   return AOM_CODEC_OK;
 }
 
+static void disable_svc(AV1_PRIMARY *ppi, AV1_COMP *cpi) {
+  cpi->svc.number_spatial_layers = 1;
+  cpi->svc.number_temporal_layers = 1;
+  ppi->number_spatial_layers = 1;
+  ppi->number_temporal_layers = 1;
+  ppi->use_svc = 0;
+}
+
 static aom_codec_err_t ctrl_set_svc_params(aom_codec_alg_priv_t *ctx,
                                            va_list args) {
   AV1_PRIMARY *const ppi = ctx->ppi;
@@ -4139,6 +4151,15 @@ static aom_codec_err_t ctrl_set_svc_params(aom_codec_alg_priv_t *ctx,
       if (params->max_quantizers[layer] > 63 ||
           params->min_quantizers[layer] < 0 ||
           params->min_quantizers[layer] > params->max_quantizers[layer]) {
+        disable_svc(ppi, cpi);
+        return AOM_CODEC_INVALID_PARAM;
+      }
+    }
+    for (sl = 0; sl < ppi->number_spatial_layers; ++sl) {
+      // Check scaling factors: spatial scaling (scaling_factor_num[]/den[]) is
+      // always to a lower resolution, so den must be >= num.
+      if (params->scaling_factor_den[sl] < params->scaling_factor_num[sl]) {
+        disable_svc(ppi, cpi);
         return AOM_CODEC_INVALID_PARAM;
       }
     }
@@ -4151,14 +4172,8 @@ static aom_codec_err_t ctrl_set_svc_params(aom_codec_alg_priv_t *ctx,
         LAYER_CONTEXT *lc = &cpi->svc.layer_context[layer];
         lc->max_q = params->max_quantizers[layer];
         lc->min_q = params->min_quantizers[layer];
-        // spatial scaling (scaling_factor_num[]/den[]) is always to a lower
-        // resolution, so den must be >= num.
-        if (params->scaling_factor_den[sl] < params->scaling_factor_num[sl]) {
-          return AOM_CODEC_INVALID_PARAM;
-        } else {
-          lc->scaling_factor_num = AOMMAX(1, params->scaling_factor_num[sl]);
-          lc->scaling_factor_den = AOMMAX(1, params->scaling_factor_den[sl]);
-        }
+        lc->scaling_factor_num = AOMMAX(1, params->scaling_factor_num[sl]);
+        lc->scaling_factor_den = AOMMAX(1, params->scaling_factor_den[sl]);
         const int layer_target_bitrate = params->layer_target_bitrate[layer];
         if (layer_target_bitrate > INT_MAX / 1000) {
           lc->layer_target_bitrate = INT_MAX;

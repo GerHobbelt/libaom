@@ -1626,14 +1626,18 @@ enum aome_enc_control_id {
   /*!\brief Codec control function to enable external rate control library.
    *
    * args: a pointer to aom_rc_funcs_t that contains implementation of callbacks
+   *
+   * \attention Experimental. Not part of the stable API.
    */
   AV1E_SET_EXTERNAL_RATE_CONTROL = 173,
 
   /*!\brief Codec control function to get GOP structure from the encoder.
    *
    * args: a pointer to aom_gop_info_t
+   *
+   * \attention Experimental. Not part of the stable API.
    */
-  AV1E_GET_GOP_INFO,
+  AV1E_GET_GOP_INFO = 174,
 
   /*!\brief Codec control function to validate HBD input.
    *
@@ -1641,7 +1645,7 @@ enum aome_enc_control_id {
    * ensure that every pixel is within the valid range. To disable/enable,
    * set this parameter to 0/1. The default value is set to be 1.
    */
-  AOME_SET_VALIDATE_HBD_INPUT,
+  AOME_SET_VALIDATE_HBD_INPUT = 175,
 
   // Any new encoder control IDs should be added above.
   // Maximum allowed encoder control ID is 229.
@@ -1900,6 +1904,8 @@ typedef enum {
 /*!\brief The GOP structure information determined by the encoder.
  * 250 is MAX_STATIC_GF_GROUP_LENGTH defined in av1/firstpass.h.
  * This is a subset of GF_GROUP. More fields can be added if needed.
+ *
+ * \attention Experimental. Not part of the stable API.
  */
 typedef struct aom_gop_info {
   int gop_size; /**< The number of frames of this GOP */
