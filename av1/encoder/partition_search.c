@@ -692,6 +692,10 @@ void av1_set_offsets_without_segment_id(const AV1_COMP *const cpi,
   set_mi_row_col(xd, tile, mi_row, mi_height, mi_col, mi_width,
                  cm->mi_params.mi_rows, cm->mi_params.mi_cols);
 
+  set_pixels_to_frame_edge(x, mi_width, mi_height, mi_col, mi_row,
+                           cm->mi_params.mi_cols, cm->mi_params.mi_rows,
+                           cm->width, cm->height, cpi->do_border_pad);
+
   // Set up source buffers.
   av1_setup_src_planes(x, cpi->source, mi_row, mi_col, num_planes, bsize);
 
@@ -4065,6 +4069,8 @@ static void prune_part4_using_sms(AV1_COMP *const cpi, MACROBLOCK *x,
 
   const BLOCK_SIZE subsize_h4 = get_partition_subsize(bsize, PARTITION_HORZ_4);
   const BLOCK_SIZE subsize_v4 = get_partition_subsize(bsize, PARTITION_VERT_4);
+  assert(subsize_h4 != BLOCK_INVALID);
+  assert(subsize_v4 != BLOCK_INVALID);
 
   const int h_mi = mi_size_high[bsize];
   const int w_mi = mi_size_wide[bsize];

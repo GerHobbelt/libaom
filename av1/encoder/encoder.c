@@ -2456,8 +2456,7 @@ void av1_set_screen_content_options(AV1_COMP *cpi, FeatureFlags *features) {
   }
 
   if (cpi->oxcf.mode == REALTIME) {
-    features->allow_screen_content_tools = features->allow_intrabc =
-        cpi->sf.rt_sf.rt_use_intrabc;
+    features->allow_screen_content_tools = features->allow_intrabc = 0;
     return;
   }
 
@@ -4553,6 +4552,16 @@ int av1_encode(AV1_COMP *const cpi, uint8_t *const dest, size_t dest_size,
   cpi->speed = frame_params->speed;
   cm->show_existing_frame = frame_params->show_existing_frame;
   cpi->existing_fb_idx_to_show = frame_params->existing_fb_idx_to_show;
+
+  if (cpi->oxcf.mode == GOOD &&
+      cpi->oxcf.q_cfg.deltaq_mode == DELTA_Q_OBJECTIVE &&
+      cpi->oxcf.algo_cfg.enable_tpl_model && cpi->oxcf.q_cfg.aq_mode == NO_AQ &&
+      !cpi->common.seg.enabled && !cpi->roi.enabled && !cpi->oxcf.sb_qp_sweep &&
+      !cpi->use_ducky_encode && cpi->oxcf.algo_cfg.sharpness != 3) {
+    cpi->do_border_pad = true;
+  } else {
+    cpi->do_border_pad = false;
+  }
 
   memcpy(cm->remapped_ref_idx, frame_params->remapped_ref_idx,
          REF_FRAMES * sizeof(*cm->remapped_ref_idx));

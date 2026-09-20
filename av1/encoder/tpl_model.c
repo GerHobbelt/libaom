@@ -212,6 +212,24 @@ void av1_setup_tpl_buffers(AV1_PRIMARY *const ppi,
   tpl_data->prev_gop_arf_disp_order = -1;
 }
 
+static inline void tpl_subtract_block(BitDepthInfo bd_info, int rows, int cols,
+                                      int16_t *diff, ptrdiff_t diff_stride,
+                                      const uint8_t *src8, ptrdiff_t src_stride,
+                                      const uint8_t *pred8,
+                                      ptrdiff_t pred_stride) {
+  assert(rows >= 4 && cols >= 4);
+#if CONFIG_AV1_HIGHBITDEPTH
+  if (bd_info.use_highbitdepth_buf) {
+    aom_highbd_subtract_block(rows, cols, diff, diff_stride, src8, src_stride,
+                              pred8, pred_stride);
+    return;
+  }
+#endif
+  (void)bd_info;
+  aom_subtract_block(rows, cols, diff, diff_stride, src8, src_stride, pred8,
+                     pred_stride);
+}
+
 static inline int32_t tpl_get_satd_cost(BitDepthInfo bd_info, int16_t *src_diff,
                                         int diff_stride, const uint8_t *src,
                                         int src_stride, const uint8_t *dst,
@@ -219,7 +237,7 @@ static inline int32_t tpl_get_satd_cost(BitDepthInfo bd_info, int16_t *src_diff,
                                         int bw, int bh, TX_SIZE tx_size) {
   const int pix_num = bw * bh;
 
-  av1_subtract_block(bd_info, bh, bw, src_diff, diff_stride, src, src_stride,
+  tpl_subtract_block(bd_info, bh, bw, src_diff, diff_stride, src, src_stride,
                      dst, dst_stride);
   av1_quick_txfm(/*use_hadamard=*/0, tx_size, bd_info, src_diff, bw, coeff);
   return aom_satd(coeff, pix_num);
@@ -247,7 +265,7 @@ static inline void txfm_quant_rdcost(
   const MACROBLOCKD *xd = &x->e_mbd;
   const BitDepthInfo bd_info = get_bit_depth_info(xd);
   uint16_t eob;
-  av1_subtract_block(bd_info, bh, bw, src_diff, diff_stride, src, src_stride,
+  tpl_subtract_block(bd_info, bh, bw, src_diff, diff_stride, src, src_stride,
                      dst, dst_stride);
   av1_quick_txfm(/*use_hadamard=*/0, tx_size, bd_info, src_diff, bw, coeff);
 
@@ -1651,6 +1669,7 @@ static inline int init_gop_frames_for_tpl(
   TplParams *const tpl_data = &cpi->ppi->tpl_data;
 
   int ref_picture_map[REF_FRAMES];
+  int has_prev_arf = 0;
 
   for (int i = 0; i < REF_FRAMES; ++i) {
     if (frame_params.frame_type == KEY_FRAME) {
@@ -1658,7 +1677,6 @@ static inline int init_gop_frames_for_tpl(
       tpl_data->tpl_frame[-i - 1].rec_picture = NULL;
       tpl_data->tpl_frame[-i - 1].frame_display_index = 0;
     } else {
-      int has_prev_arf = 0;
       if (cm->ref_frame_map[i]->display_order_hint ==
           tpl_data->prev_gop_arf_disp_order) {
         tpl_data->tpl_frame[-i - 1].gf_picture = &tpl_data->prev_gop_arf_src;
@@ -1671,13 +1689,13 @@ static inline int init_gop_frames_for_tpl(
       }
       tpl_data->tpl_frame[-i - 1].frame_display_index =
           cm->ref_frame_map[i]->display_order_hint;
-
-      if (!has_prev_arf) {
-        tpl_data->prev_gop_arf_disp_order = -1;
-      }
     }
 
     ref_picture_map[i] = -i - 1;
+  }
+
+  if (frame_params.frame_type != KEY_FRAME && !has_prev_arf) {
+    tpl_data->prev_gop_arf_disp_order = -1;
   }
 
   *tpl_group_frames = 0;
