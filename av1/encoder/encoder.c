@@ -1128,7 +1128,17 @@ void av1_change_config(struct AV1_COMP *cpi, const AV1EncoderConfig *oxcf,
   assert(!oxcf->tool_cfg.enable_global_motion);
   cpi->alloc_pyramid = false;
 #else
-  cpi->alloc_pyramid = oxcf->tool_cfg.enable_global_motion;
+  // Global motion needs an image pyramid in every source and reference frame
+  // buffer, but pyramids are only allocated while global motion is enabled.
+  // Once the first frame has been received (creating the lookahead), some
+  // buffers may lack pyramids, so global motion can be disabled but not
+  // enabled. Check the primary compressor, which is always updated first, so
+  // that all compressors sharing these buffers (including any created after
+  // the first frame) agree.
+  if (cpi->ppi->lookahead != NULL && !cpi->ppi->cpi->alloc_pyramid) {
+    cpi->oxcf.tool_cfg.enable_global_motion = false;
+  }
+  cpi->alloc_pyramid = cpi->oxcf.tool_cfg.enable_global_motion;
 #endif  // CONFIG_REALTIME_ONLY
 }
 
@@ -2510,11 +2520,18 @@ static void init_motion_estimation(AV1_COMP *cpi) {
   const int aligned_width = (cm->width + 7) & ~7;
   const int y_stride =
       aom_calc_y_stride(aligned_width, cpi->oxcf.border_in_pixels);
+  // cpi->ppi->lookahead->buf is a multi-slot buffer, so buf[0] may not be
+  // the current frame's slot and can retain an old stride after a frame resize
+  // in av1_lookahead_push(). During av1_encode(), cpi->unscaled_source points
+  // to the current frame's lookahead buffer entry (frame_input->source).
+  const int lookahead_y_stride = cpi->unscaled_source != NULL
+                                     ? cpi->unscaled_source->y_stride
+                                     : cpi->ppi->lookahead->buf[0].img.y_stride;
   const int y_stride_src = ((cpi->oxcf.frm_dim_cfg.width != cm->width ||
                              cpi->oxcf.frm_dim_cfg.height != cm->height) ||
                             av1_superres_scaled(cm))
                                ? y_stride
-                               : cpi->ppi->lookahead->buf->img.y_stride;
+                               : lookahead_y_stride;
   int fpf_y_stride =
       cm->cur_frame != NULL ? cm->cur_frame->buf.y_stride : y_stride;
 
@@ -2523,10 +2540,13 @@ static void init_motion_estimation(AV1_COMP *cpi) {
   const int should_update =
       !mv_search_params->search_site_cfg[SS_CFG_SRC][DIAMOND].stride ||
       !mv_search_params->search_site_cfg[SS_CFG_LOOKAHEAD][DIAMOND].stride ||
+      !mv_search_params->search_site_cfg[SS_CFG_FPF][DIAMOND].stride ||
       (y_stride !=
        mv_search_params->search_site_cfg[SS_CFG_SRC][DIAMOND].stride) ||
       (y_stride_src !=
-       mv_search_params->search_site_cfg[SS_CFG_LOOKAHEAD][DIAMOND].stride);
+       mv_search_params->search_site_cfg[SS_CFG_LOOKAHEAD][DIAMOND].stride) ||
+      (fpf_y_stride !=
+       mv_search_params->search_site_cfg[SS_CFG_FPF][DIAMOND].stride);
 
   if (!should_update) {
     return;
@@ -5762,6 +5782,7 @@ int av1_init_parallel_frame_context(const AV1_COMP_DATA *const first_cpi_data,
         int src_index = gf_group->src_offset[i];
         struct lookahead_entry *prev_source = av1_lookahead_peek(
             ppi->lookahead, src_index - 1, cur_cpi->compressor_stage);
+        assert(prev_source != NULL);
         // Save timestamps of prev frame.
         cur_cpi->time_stamps.prev_ts_start = prev_source->ts_start;
         cur_cpi->time_stamps.prev_ts_end = prev_source->ts_end;
