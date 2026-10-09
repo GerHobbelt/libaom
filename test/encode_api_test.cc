@@ -775,6 +775,86 @@ TEST(EncodeAPI, Buganizer310548198) {
   ASSERT_EQ(aom_codec_destroy(&enc), AOM_CODEC_OK);
 }
 
+#if !CONFIG_REALTIME_ONLY
+// Test for OSS-Fuzz Issue 559019046. The bug triggers when we increase the
+// number of tiles after encoding a non-intra frame and then encode a key frame.
+// Based on Yuan Tong's example in
+// https://github.com/AOMediaCodec/libavif/pull/1069#discussion_r4090282167:
+//   magick -size 128x1024 xc:gray -alpha set -channel A -evaluate set 60%
+//       +channel flat.png
+//   avifenc -s 6 -j 8 -k 2 flat.png flat.png --tilerowslog2:u 2 flat.png
+//       -o flat.avif
+TEST(EncodeAPI, Issue559019046) {
+  aom_codec_iface_t *const iface = aom_codec_av1_cx();
+  aom_codec_enc_cfg_t cfg;
+  const unsigned int usage = AOM_USAGE_GOOD_QUALITY;
+  ASSERT_EQ(aom_codec_enc_config_default(iface, &cfg, usage), AOM_CODEC_OK);
+  cfg.g_threads = 8;
+  cfg.g_w = 128;
+  cfg.g_h = 1024;
+  cfg.g_lag_in_frames = 0;
+  cfg.kf_max_dist = 2;
+
+  aom_codec_ctx_t enc;
+  ASSERT_EQ(aom_codec_enc_init(&enc, iface, &cfg, 0), AOM_CODEC_OK);
+
+  const int speed = 6;
+  ASSERT_EQ(aom_codec_control(&enc, AOME_SET_CPUUSED, speed), AOM_CODEC_OK);
+
+  const aom_enc_frame_flags_t flags = 0;
+  int frame_index = 0;
+
+  // Encode a key frame.
+  aom_image_t *image = CreateGrayImage(AOM_IMG_FMT_I420, cfg.g_w, cfg.g_h);
+  ASSERT_NE(image, nullptr);
+  ASSERT_EQ(aom_codec_encode(&enc, image, frame_index, 1, flags), AOM_CODEC_OK);
+  frame_index++;
+  const aom_codec_cx_pkt_t *pkt;
+  aom_codec_iter_t iter = nullptr;
+  while ((pkt = aom_codec_get_cx_data(&enc, &iter)) != nullptr) {
+    ASSERT_EQ(pkt->kind, AOM_CODEC_CX_FRAME_PKT);
+    ASSERT_EQ(pkt->data.frame.flags & AOM_FRAME_IS_KEY, AOM_FRAME_IS_KEY);
+  }
+
+  // Encode a non-intra frame.
+  ASSERT_EQ(aom_codec_encode(&enc, image, frame_index, 1, flags), AOM_CODEC_OK);
+  frame_index++;
+  iter = nullptr;
+  while ((pkt = aom_codec_get_cx_data(&enc, &iter)) != nullptr) {
+    ASSERT_EQ(pkt->kind, AOM_CODEC_CX_FRAME_PKT);
+    ASSERT_EQ(
+        pkt->data.frame.flags & (AOM_FRAME_IS_KEY | AOM_FRAME_IS_INTRAONLY), 0);
+  }
+
+  // Increase the number of tiles.
+  ASSERT_EQ(aom_codec_control(&enc, AV1E_SET_TILE_ROWS, 2), AOM_CODEC_OK);
+
+  // Encode a key frame.
+  ASSERT_EQ(aom_codec_encode(&enc, image, frame_index, 1, flags), AOM_CODEC_OK);
+  frame_index++;
+  iter = nullptr;
+  while ((pkt = aom_codec_get_cx_data(&enc, &iter)) != nullptr) {
+    ASSERT_EQ(pkt->kind, AOM_CODEC_CX_FRAME_PKT);
+    ASSERT_EQ(pkt->data.frame.flags & AOM_FRAME_IS_KEY, AOM_FRAME_IS_KEY);
+  }
+  aom_img_free(image);
+
+  // Flush the encoder.
+  bool got_data;
+  do {
+    ASSERT_EQ(aom_codec_encode(&enc, nullptr, 0, 0, 0), AOM_CODEC_OK);
+    got_data = false;
+    iter = nullptr;
+    while ((pkt = aom_codec_get_cx_data(&enc, &iter)) != nullptr) {
+      ASSERT_EQ(pkt->kind, AOM_CODEC_CX_FRAME_PKT);
+      got_data = true;
+    }
+  } while (got_data);
+
+  ASSERT_EQ(aom_codec_destroy(&enc), AOM_CODEC_OK);
+}
+#endif  // !CONFIG_REALTIME_ONLY
+
 // Emulates the WebCodecs VideoEncoder interface.
 class AV1Encoder {
  public:
@@ -1427,6 +1507,115 @@ INSTANTIATE_TEST_SUITE_P(All, EncodeAPIParameterized,
                              /*usage=*/testing::ValuesIn(kUsages),
                              /*speed=*/testing::Values(6, 7, 10),
                              /*aq_mode=*/testing::Values(0, 1, 2, 3)));
+
+// Triggers the IntraBC motion search by using screen content tools to encode a
+// key frame.
+// Note: The speed must be low enough to run the IntraBC pixel search.
+void IntraBCFrameSizeIncreaseTest(unsigned int usage, int speed) {
+  aom_codec_iface_t *iface = aom_codec_av1_cx();
+  aom_codec_enc_cfg_t cfg;
+  ASSERT_EQ(aom_codec_enc_config_default(iface, &cfg, usage), AOM_CODEC_OK);
+  cfg.g_w = 64;
+  cfg.g_h = 16;
+  cfg.g_forced_max_frame_width = 64;
+  cfg.g_forced_max_frame_height = 64;
+  cfg.g_lag_in_frames = 0;
+  cfg.g_threads = 1;
+
+  aom_codec_ctx_t enc;
+  ASSERT_EQ(aom_codec_enc_init(&enc, iface, &cfg, 0), AOM_CODEC_OK);
+  ASSERT_EQ(aom_codec_control(&enc, AOME_SET_CPUUSED, speed), AOM_CODEC_OK);
+  ASSERT_EQ(aom_codec_control(&enc, AV1E_SET_TUNE_CONTENT, AOM_CONTENT_SCREEN),
+            AOM_CODEC_OK);
+
+  aom_image_t *img_small = aom_img_alloc(nullptr, AOM_IMG_FMT_I420, 64, 16, 1);
+  ASSERT_NE(img_small, nullptr);
+  FillImageRandom(img_small);
+  aom_image_t *img_large = aom_img_alloc(nullptr, AOM_IMG_FMT_I420, 64, 64, 1);
+  ASSERT_NE(img_large, nullptr);
+  FillImageRandom(img_large);
+
+  EncodeOne(&enc, img_small, 0);
+
+  // Only the height grows, so the reconstructed frame keeps its stride while
+  // the source buffer gets a new one.
+  cfg.g_h = 64;
+  ASSERT_EQ(aom_codec_enc_config_set(&enc, &cfg), AOM_CODEC_OK);
+  ASSERT_EQ(aom_codec_encode(&enc, img_large, 1, 1, AOM_EFLAG_FORCE_KF),
+            AOM_CODEC_OK);
+  bool got_key_frame = false;
+  aom_codec_iter_t iter = nullptr;
+  while (const aom_codec_cx_pkt_t *pkt = aom_codec_get_cx_data(&enc, &iter)) {
+    if (pkt->kind == AOM_CODEC_CX_FRAME_PKT &&
+        (pkt->data.frame.flags & AOM_FRAME_IS_KEY)) {
+      got_key_frame = true;
+    }
+  }
+  EXPECT_TRUE(got_key_frame);
+
+  aom_img_free(img_small);
+  aom_img_free(img_large);
+  ASSERT_EQ(aom_codec_destroy(&enc), AOM_CODEC_OK);
+}
+
+#if !CONFIG_REALTIME_ONLY
+TEST(EncodeAPI, IntraBCFrameSizeIncreaseGoodQuality) {
+  IntraBCFrameSizeIncreaseTest(AOM_USAGE_GOOD_QUALITY, 2);
+}
+
+TEST(EncodeAPI, IntraBCFrameSizeIncreaseAllIntra) {
+  IntraBCFrameSizeIncreaseTest(AOM_USAGE_ALL_INTRA, 5);
+}
+#endif  // !CONFIG_REALTIME_ONLY
+
+TEST(EncodeAPI, IntraBCFrameSizeIncreaseRealtime) {
+  IntraBCFrameSizeIncreaseTest(AOM_USAGE_REALTIME, 7);
+}
+
+// Encodes a narrow key frame after a wide one with screen content tools in
+// realtime mode. The source buffer of the narrow frame has a smaller stride
+// than the buffer of the wide frame, so the IntraBC motion search must not use
+// search sites built for the wider stride. The assertion in
+// av1_full_pixel_search() checks that the strides match.
+TEST(EncodeAPI, IntraBCFrameSizeDecreaseRealtime) {
+  aom_codec_iface_t *iface = aom_codec_av1_cx();
+  aom_codec_enc_cfg_t cfg;
+  ASSERT_EQ(aom_codec_enc_config_default(iface, &cfg, AOM_USAGE_REALTIME),
+            AOM_CODEC_OK);
+  cfg.g_w = 1024;
+  cfg.g_h = 512;
+  cfg.g_lag_in_frames = 0;
+  cfg.g_threads = 1;
+
+  aom_codec_ctx_t enc;
+  ASSERT_EQ(aom_codec_enc_init(&enc, iface, &cfg, 0), AOM_CODEC_OK);
+  ASSERT_EQ(aom_codec_control(&enc, AOME_SET_CPUUSED, 7), AOM_CODEC_OK);
+  ASSERT_EQ(aom_codec_control(&enc, AV1E_SET_TUNE_CONTENT, AOM_CONTENT_SCREEN),
+            AOM_CODEC_OK);
+
+  aom_image_t *img_wide =
+      aom_img_alloc(nullptr, AOM_IMG_FMT_I420, 1024, 512, 1);
+  ASSERT_NE(img_wide, nullptr);
+  FillImageRandom(img_wide);
+  aom_image_t *img_narrow =
+      aom_img_alloc(nullptr, AOM_IMG_FMT_I420, 32, 512, 1);
+  ASSERT_NE(img_narrow, nullptr);
+  FillImageRandom(img_narrow);
+
+  EncodeOne(&enc, img_wide, 0);
+
+  cfg.g_w = 32;
+  ASSERT_EQ(aom_codec_enc_config_set(&enc, &cfg), AOM_CODEC_OK);
+  ASSERT_EQ(aom_codec_encode(&enc, img_narrow, 1, 1, AOM_EFLAG_FORCE_KF),
+            AOM_CODEC_OK);
+  aom_codec_iter_t iter = nullptr;
+  while (aom_codec_get_cx_data(&enc, &iter) != nullptr) {
+  }
+
+  aom_img_free(img_wide);
+  aom_img_free(img_narrow);
+  ASSERT_EQ(aom_codec_destroy(&enc), AOM_CODEC_OK);
+}
 
 #if !CONFIG_REALTIME_ONLY
 TEST(EncodeAPI, AllIntraMode) {
