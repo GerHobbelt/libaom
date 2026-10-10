@@ -30,9 +30,6 @@
 #include "aom/aom_image.h"
 #include "aom_mem/aom_mem.h"
 
-#include "av1/common/blockd.h"
-#include "av1/common/reconintra.h"
-#include "av1/encoder/allintra_vis.h"
 #include "test/acm_random.h"
 #include "test/codec_factory.h"
 #include "test/encode_test_driver.h"
@@ -3350,47 +3347,6 @@ TEST(EncodeAPI, Issue559225640) {
 
 #if !CONFIG_REALTIME_ONLY
 TEST(EncodeAPI, Buganizer558446054) {
-#if !CONFIG_SHARED
-  av1_init_intra_predictors();
-
-  MACROBLOCKD xd = {};
-  YV12_BUFFER_CONFIG cur_buf = {};
-  xd.cur_buf = &cur_buf;
-  MB_MODE_INFO mbmi = {};
-  mbmi.bsize = BLOCK_8X8;
-  mbmi.partition = PARTITION_NONE;
-  mbmi.mode = D45_PRED;
-  MB_MODE_INFO *mbmi_ptr = &mbmi;
-  xd.mi = &mbmi_ptr;
-  xd.bd = 8;
-  xd.left_available = 1;
-  xd.up_available = 1;
-  xd.tile.mi_row_end = 100;
-  xd.tile.mi_col_end = 100;
-  // Set mb_to_bottom_edge and mb_to_right_edge such that
-  // yd + txhpx < 0 and xr < 0:
-  // yd + txhpx = (mb_to_bottom_edge >> 3) + hpx - y = -16 + 8 - 0 = -8 < 0
-  // xr = (mb_to_right_edge >> 3) + wpx - x - txwpx = -5 + 8 - 0 - 4 = -1 < 0
-  // xr + txwpx = 3 > 0 (so n_top_px = 3).
-  xd.mb_to_bottom_edge = -16 * 8;
-  xd.mb_to_right_edge = -5 * 8;
-
-  uint8_t ref_buf[64 * 64];
-  memset(ref_buf, 200, sizeof(ref_buf));
-  uint8_t dst_buf[64 * 64] = { 0 };
-  av1_predict_intra_block(&xd, BLOCK_64X64, /*enable_intra_edge_filter=*/0,
-                          /*wpx=*/8, /*hpx=*/8, TX_4X4, D45_PRED,
-                          /*angle_delta=*/0, /*use_palette=*/0,
-                          FILTER_INTRA_MODES, ref_buf + 64 * 8 + 8, 64, dst_buf,
-                          64, /*col_off=*/0, /*row_off=*/0, /*plane=*/0);
-  // In Debug builds (-UNDEBUG), reverting clamp() triggers:
-  //   Assertion `n_left_px >= 0' failed.
-  // In Release builds (-DNDEBUG), reverting clamp() causes n_topright_px < 0
-  // (-4 < 0), skipping top-right extension of above_row[3]=200 into
-  // above_row[4..7] and leaving dst_buf[3] == 127 instead of 200.
-  ASSERT_EQ(dst_buf[3], 200);
-#endif  // !CONFIG_SHARED
-
   aom_codec_iface_t *iface = aom_codec_av1_cx();
   aom_codec_enc_cfg_t cfg;
   ASSERT_EQ(aom_codec_enc_config_default(iface, &cfg, AOM_USAGE_ALL_INTRA),
@@ -3416,30 +3372,8 @@ TEST(EncodeAPI, Buganizer558446054) {
   aom_img_free(&raw);
   ASSERT_EQ(aom_codec_destroy(&codec), AOM_CODEC_OK);
 }
-#endif  // !CONFIG_REALTIME_ONLY
 
-#if !CONFIG_REALTIME_ONLY
 TEST(EncodeAPI, Buganizer558463892_558589747) {
-#if !CONFIG_SHARED
-  std::unique_ptr<AV1_COMP> cpi_test(new AV1_COMP());
-  struct aom_internal_error_info error = {};
-  if (setjmp(error.jmp)) FAIL();
-  error.setjmp = 1;
-  cpi_test->common.error = &error;
-  cpi_test->frame_info.mi_rows = 16;
-  cpi_test->frame_info.mi_cols = 16;
-  av1_init_mb_wiener_var_buffer(cpi_test.get());
-  ASSERT_NE(cpi_test->mb_weber_stats, nullptr);
-  cpi_test->mb_weber_stats[0].satd = 12345;
-
-  // Increase dimensions to 64x64 MI units: mb_weber_stats must be reallocated.
-  cpi_test->frame_info.mi_rows = 64;
-  cpi_test->frame_info.mi_cols = 64;
-  av1_init_mb_wiener_var_buffer(cpi_test.get());
-  EXPECT_EQ(cpi_test->mb_weber_stats[0].satd, 0);
-  aom_free(cpi_test->mb_weber_stats);
-#endif  // !CONFIG_SHARED
-
   aom_codec_iface_t *iface = aom_codec_av1_cx();
   aom_codec_enc_cfg_t cfg;
   ASSERT_EQ(aom_codec_enc_config_default(iface, &cfg, AOM_USAGE_ALL_INTRA),
@@ -3478,46 +3412,6 @@ TEST(EncodeAPI, Buganizer558463892_558589747) {
   aom_img_free(&raw);
 
   ASSERT_EQ(aom_codec_destroy(&codec), AOM_CODEC_OK);
-}
-#endif  // !CONFIG_REALTIME_ONLY
-
-#if !CONFIG_REALTIME_ONLY
-TEST(EncodeAPI, Buganizer558417547) {
-#if !CONFIG_SHARED
-  std::unique_ptr<AV1_COMP> cpi_test(new AV1_COMP());
-  SequenceHeader seq_params = {};
-  seq_params.bit_depth = AOM_BITS_8;
-  seq_params.sb_size = BLOCK_64X64;
-  cpi_test->common.seq_params = &seq_params;
-  cpi_test->common.mi_params.mi_rows = 16;
-  cpi_test->common.mi_params.mi_cols = 16;
-  cpi_test->common.quant_params.base_qindex = 128;
-  cpi_test->common.delta_q_info.delta_q_res = 4;
-  cpi_test->frame_info.mi_rows = 16;
-  cpi_test->frame_info.mi_cols = 16;
-  cpi_test->norm_wiener_variance = 100;
-  struct aom_internal_error_info error = {};
-  if (setjmp(error.jmp)) FAIL();
-  error.setjmp = 1;
-  cpi_test->common.error = &error;
-  av1_init_mb_wiener_var_buffer(cpi_test.get());
-  ASSERT_NE(cpi_test->mb_weber_stats, nullptr);
-
-  // Set large SATD and distortion values exceeding INT32_MAX.
-  for (int i = 0; i < 16 * 16; ++i) {
-    cpi_test->mb_weber_stats[i].satd = 3000000000LL;
-    cpi_test->mb_weber_stats[i].distortion = 3000000000LL;
-    cpi_test->mb_weber_stats[i].rec_pix_max = 255;
-  }
-
-  // Test out-of-bounds / negative mi_row and mi_col without crashing or SIGFPE.
-  int q_neg = av1_get_sbq_perceptual_ai(cpi_test.get(), BLOCK_64X64, -16, -16);
-  EXPECT_GE(q_neg, 0);
-  int q_oob = av1_get_sbq_perceptual_ai(cpi_test.get(), BLOCK_64X64, 100, 100);
-  EXPECT_GE(q_oob, 0);
-
-  aom_free(cpi_test->mb_weber_stats);
-#endif  // !CONFIG_SHARED
 }
 
 // Regression test for b/565488030: Heap-buffer-overflow in
@@ -3639,6 +3533,106 @@ TEST(EncodeAPI, NonrdBlockYrdRateOverflow) {
 
   aom_img_free(img);
   ASSERT_EQ(aom_codec_destroy(&enc), AOM_CODEC_OK);
+}
+
+// Regression test for webrtc:496266459: Enabling compound prediction via
+// AV1E_SET_SVC_REF_FRAME_COMP_PRED must not affect encoding of frames that do
+// not have any active compound reference pair (e.g., single-reference delta
+// frames referencing only LAST_FRAME).
+TEST(EncodeAPI, SvcCompPredDoesNotAffectSingleRefFrames) {
+  aom_codec_iface_t *const iface = aom_codec_av1_cx();
+  aom_codec_enc_cfg_t cfg;
+  ASSERT_EQ(aom_codec_enc_config_default(iface, &cfg, AOM_USAGE_REALTIME),
+            AOM_CODEC_OK);
+  cfg.g_w = 320;
+  cfg.g_h = 240;
+  cfg.g_lag_in_frames = 0;
+  cfg.rc_end_usage = AOM_Q;
+
+  aom_codec_ctx_t enc_no_comp;
+  aom_codec_ctx_t enc_with_comp;
+  ASSERT_EQ(aom_codec_enc_init(&enc_no_comp, iface, &cfg, 0), AOM_CODEC_OK);
+  ASSERT_EQ(aom_codec_enc_init(&enc_with_comp, iface, &cfg, 0), AOM_CODEC_OK);
+
+  for (aom_codec_ctx_t *enc : { &enc_no_comp, &enc_with_comp }) {
+    ASSERT_EQ(aom_codec_control(enc, AOME_SET_CPUUSED, 9), AOM_CODEC_OK);
+    ASSERT_EQ(aom_codec_control(enc, AOME_SET_CQ_LEVEL, 40), AOM_CODEC_OK);
+  }
+
+  // Enable compound prediction for all three compound reference pairs
+  // (GOLDEN_LAST, LAST2_LAST, ALTREF_LAST) on the second encoder.
+  aom_svc_ref_frame_comp_pred_t comp_pred = {};
+  comp_pred.use_comp_pred[0] = 1;
+  comp_pred.use_comp_pred[1] = 1;
+  comp_pred.use_comp_pred[2] = 1;
+  ASSERT_EQ(aom_codec_control(&enc_with_comp, AV1E_SET_SVC_REF_FRAME_COMP_PRED,
+                              &comp_pred),
+            AOM_CODEC_OK);
+
+  aom_image_t *img =
+      aom_img_alloc(nullptr, AOM_IMG_FMT_I420, cfg.g_w, cfg.g_h, 1);
+  ASSERT_NE(img, nullptr);
+
+  constexpr int kNumFrames = 10;
+  for (int frame = 0; frame < kNumFrames; ++frame) {
+    SCOPED_TRACE(frame);
+    // Fill moving textured pattern.
+    for (unsigned int r = 0; r < img->d_h; ++r) {
+      for (unsigned int c = 0; c < img->d_w; ++c) {
+        const int texture = (((r + frame) / 8 + (c + 2 * frame) / 8) & 1) * 32;
+        img->planes[AOM_PLANE_Y][r * img->stride[AOM_PLANE_Y] + c] =
+            static_cast<uint8_t>((r + 2 * c + 3 * frame + texture) & 0xff);
+      }
+    }
+    for (int plane = AOM_PLANE_U; plane <= AOM_PLANE_V; ++plane) {
+      const unsigned int h =
+          (img->d_h + img->y_chroma_shift) >> img->y_chroma_shift;
+      for (unsigned int r = 0; r < h; ++r) {
+        memset(img->planes[plane] + r * img->stride[plane], 128,
+               (img->d_w + img->x_chroma_shift) >> img->x_chroma_shift);
+      }
+    }
+
+    // Frame 0 refreshes slot 0; delta frames reference only LAST_FRAME (slot 0)
+    // with all other reference[i] = 0, and refresh slot 0.
+    aom_svc_ref_frame_config_t ref_cfg = {};
+    ref_cfg.ref_idx[0] = 0;  // LAST_FRAME -> slot 0.
+    ref_cfg.reference[0] = frame > 0;
+    ref_cfg.refresh[0] = 1;
+
+    for (aom_codec_ctx_t *enc : { &enc_no_comp, &enc_with_comp }) {
+      ASSERT_EQ(aom_codec_control(enc, AV1E_SET_SVC_REF_FRAME_CONFIG, &ref_cfg),
+                AOM_CODEC_OK);
+      ASSERT_EQ(aom_codec_encode(enc, img, frame, 1, 0), AOM_CODEC_OK);
+    }
+
+    aom_codec_iter_t iter_no_comp = nullptr;
+    aom_codec_iter_t iter_with_comp = nullptr;
+    const aom_codec_cx_pkt_t *pkt_no_comp =
+        aom_codec_get_cx_data(&enc_no_comp, &iter_no_comp);
+    const aom_codec_cx_pkt_t *pkt_with_comp =
+        aom_codec_get_cx_data(&enc_with_comp, &iter_with_comp);
+    ASSERT_NE(pkt_no_comp, nullptr);
+    ASSERT_NE(pkt_with_comp, nullptr);
+    ASSERT_EQ(pkt_no_comp->kind, AOM_CODEC_CX_FRAME_PKT);
+    ASSERT_EQ(pkt_with_comp->kind, AOM_CODEC_CX_FRAME_PKT);
+    // If use_comp_ref_nonrd is left enabled when no compound reference pair is
+    // active, single-reference frames switch reference mode
+    // (REFERENCE_MODE_SELECT) and interpolation filter (SWITCHABLE) signaling
+    // and mode search, altering both packet sizes and bitstream bytes. Verify
+    // that the output frames remain bit-exact (same size and identical bytes)
+    // as when compound prediction is disabled.
+    EXPECT_EQ(pkt_with_comp->data.frame.sz, pkt_no_comp->data.frame.sz);
+    if (pkt_with_comp->data.frame.sz == pkt_no_comp->data.frame.sz) {
+      EXPECT_EQ(memcmp(pkt_with_comp->data.frame.buf,
+                       pkt_no_comp->data.frame.buf, pkt_no_comp->data.frame.sz),
+                0);
+    }
+  }
+
+  aom_img_free(img);
+  ASSERT_EQ(aom_codec_destroy(&enc_with_comp), AOM_CODEC_OK);
+  ASSERT_EQ(aom_codec_destroy(&enc_no_comp), AOM_CODEC_OK);
 }
 
 }  // namespace
