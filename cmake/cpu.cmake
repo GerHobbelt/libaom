@@ -106,6 +106,9 @@ elseif("${AOM_TARGET_CPU}" MATCHES "ppc")
     set(AOM_RTCD_FLAGS ${AOM_RTCD_FLAGS} --disable-vsx)
   endif()
 elseif("${AOM_TARGET_CPU}" MATCHES "^x86")
+  if(ENABLE_X86_ASM)
+    set(HAVE_X86_ASM 1)
+  endif()
   if("${AOM_TARGET_CPU}" STREQUAL "x86")
     set(AOM_ARCH_X86 1)
     # Disable avx512
@@ -130,6 +133,18 @@ elseif("${AOM_TARGET_CPU}" MATCHES "^x86")
       set(AOM_RTCD_FLAGS ${AOM_RTCD_FLAGS} --disable-${flavor})
     endif()
   endforeach()
+elseif("${AOM_TARGET_CPU}" STREQUAL "wasm32")
+  set(AOM_ARCH_WASM 1)
+
+  # WebAssembly has no run-time CPU detection: SIMD128 is a compile-time
+  # property of the module, so dispatch is resolved statically.
+  if(ENABLE_SIMD128)
+    set(HAVE_SIMD128 1)
+    set(AOM_SIMD128_FLAG "-msimd128")
+  else()
+    set(HAVE_SIMD128 0)
+    set(AOM_RTCD_FLAGS ${AOM_RTCD_FLAGS} --disable-simd128)
+  endif()
 elseif("${AOM_TARGET_CPU}" MATCHES "riscv")
   set(AOM_ARCH_RISCV64 1)
 
