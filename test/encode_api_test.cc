@@ -28,11 +28,16 @@
 #include "aom/aomcx.h"
 #include "aom/aom_encoder.h"
 #include "aom/aom_image.h"
+#if CONFIG_AV1_DECODER
+#include "aom/aom_decoder.h"
+#include "aom/aomdx.h"
+#endif
 #include "aom_mem/aom_mem.h"
 
 #include "test/acm_random.h"
 #include "test/codec_factory.h"
 #include "test/encode_test_driver.h"
+#include "test/md5_helper.h"
 #include "test/util.h"
 #include "test/video_source.h"
 
@@ -1621,6 +1626,170 @@ TEST(EncodeAPI, IntraBCFrameSizeDecreaseRealtime) {
   aom_img_free(img_narrow);
   ASSERT_EQ(aom_codec_destroy(&enc), AOM_CODEC_OK);
 }
+
+#if CONFIG_AV1_DECODER
+// Draws a text like screen texture moved left by offset_x pixels.
+void FillPannedScreen(aom_image_t *img, int offset_x) {
+  for (int plane = 0; plane < 3; ++plane) {
+    const int ss = plane ? 1 : 0;
+    const int w = static_cast<int>(img->d_w + ss) >> ss;
+    const int h = static_cast<int>(img->d_h + ss) >> ss;
+    for (int y = 0; y < h; ++y) {
+      uint8_t *row = img->planes[plane] + y * img->stride[plane];
+      for (int x = 0; x < w; ++x) {
+        const int px = (x << ss) + offset_x;
+        const int py = y << ss;
+        const uint32_t cell = static_cast<uint32_t>(px >> 4) * 73856093u ^
+                              static_cast<uint32_t>(py >> 4) * 19349663u;
+        const int bg = 40 + static_cast<int>(cell % 160);
+        const bool glyph = (px * 7 + py * 3) % 11 < 3 && ((px ^ py) & 4);
+        const int v = glyph ? 255 - bg : bg;
+        row[x] = plane ? static_cast<uint8_t>(128 + ((v - 128) >> 2))
+                       : static_cast<uint8_t>(v);
+      }
+    }
+  }
+}
+
+// Encodes an IntraBC key frame with 2 threads, then pans the content so the
+// inter frames predict from past the frame edge. The loop filters are off on
+// IntraBC frames, so the encoder must still extend the key frame borders for
+// its reconstruction to match the decoder.
+TEST(EncodeAPI, IntraBCMultiThreadBorderExtension) {
+  constexpr int kWidth = 320;
+  constexpr int kHeight = 192;
+  constexpr int kFrames = 5;
+  aom_codec_iface_t *iface = aom_codec_av1_cx();
+  aom_codec_enc_cfg_t cfg;
+  ASSERT_EQ(aom_codec_enc_config_default(iface, &cfg, AOM_USAGE_REALTIME),
+            AOM_CODEC_OK);
+  cfg.g_w = kWidth;
+  cfg.g_h = kHeight;
+  cfg.g_lag_in_frames = 0;
+  cfg.g_threads = 2;
+  cfg.rc_min_quantizer = 8;
+  cfg.rc_max_quantizer = 40;
+
+  aom_codec_ctx_t enc;
+  ASSERT_EQ(aom_codec_enc_init(&enc, iface, &cfg, 0), AOM_CODEC_OK);
+  ASSERT_EQ(aom_codec_control(&enc, AOME_SET_CPUUSED, 11), AOM_CODEC_OK);
+  ASSERT_EQ(aom_codec_control(&enc, AV1E_SET_TUNE_CONTENT, AOM_CONTENT_SCREEN),
+            AOM_CODEC_OK);
+  ASSERT_EQ(aom_codec_control(&enc, AV1E_SET_ENABLE_INTRABC, 1), AOM_CODEC_OK);
+
+  aom_codec_ctx_t dec;
+  ASSERT_EQ(aom_codec_dec_init(&dec, aom_codec_av1_dx(), nullptr, 0),
+            AOM_CODEC_OK);
+
+  aom_image_t *img =
+      aom_img_alloc(nullptr, AOM_IMG_FMT_I420, kWidth, kHeight, 1);
+  ASSERT_NE(img, nullptr);
+  for (int i = 0; i < kFrames; ++i) {
+    FillPannedScreen(img, i * 3);
+    ASSERT_EQ(aom_codec_encode(&enc, img, i, 1, 0), AOM_CODEC_OK);
+    aom_codec_iter_t iter = nullptr;
+    while (const aom_codec_cx_pkt_t *pkt = aom_codec_get_cx_data(&enc, &iter)) {
+      if (pkt->kind != AOM_CODEC_CX_FRAME_PKT) continue;
+      ASSERT_EQ(aom_codec_decode(
+                    &dec, static_cast<const uint8_t *>(pkt->data.frame.buf),
+                    pkt->data.frame.sz, nullptr),
+                AOM_CODEC_OK);
+      aom_codec_iter_t dec_iter = nullptr;
+      const aom_image_t *decoded = aom_codec_get_frame(&dec, &dec_iter);
+      ASSERT_NE(decoded, nullptr);
+      aom_image_t recon;
+      ASSERT_EQ(aom_codec_control(&enc, AV1_GET_NEW_FRAME_IMAGE, &recon),
+                AOM_CODEC_OK);
+      ::libaom_test::MD5 recon_md5;
+      recon_md5.Add(&recon);
+      ::libaom_test::MD5 decoded_md5;
+      decoded_md5.Add(decoded);
+      EXPECT_STREQ(recon_md5.Get(), decoded_md5.Get()) << "frame " << i;
+    }
+  }
+
+  aom_img_free(img);
+  ASSERT_EQ(aom_codec_destroy(&dec), AOM_CODEC_OK);
+  ASSERT_EQ(aom_codec_destroy(&enc), AOM_CODEC_OK);
+}
+
+// Encodes a key frame with screen content tools in realtime mode. A 64x64 patch
+// of two color noise at (src_x, src_y) is copied to (dst_x, dst_y), so the
+// IntraBC hash search finds a match that far away. A DV of 2048 pixels or more
+// can't be coded, so the decoder must still accept the frame.
+void IntraBCFarCopyTest(int width, int height, int src_x, int src_y, int dst_x,
+                        int dst_y) {
+  constexpr int kPatchSize = 64;
+  aom_codec_iface_t *iface = aom_codec_av1_cx();
+  aom_codec_enc_cfg_t cfg;
+  ASSERT_EQ(aom_codec_enc_config_default(iface, &cfg, AOM_USAGE_REALTIME),
+            AOM_CODEC_OK);
+  cfg.g_w = width;
+  cfg.g_h = height;
+  cfg.g_lag_in_frames = 0;
+  cfg.g_threads = 1;
+  cfg.rc_min_quantizer = 10;
+  cfg.rc_max_quantizer = 10;
+
+  aom_codec_ctx_t enc;
+  ASSERT_EQ(aom_codec_enc_init(&enc, iface, &cfg, 0), AOM_CODEC_OK);
+  ASSERT_EQ(aom_codec_control(&enc, AOME_SET_CPUUSED, 11), AOM_CODEC_OK);
+  ASSERT_EQ(aom_codec_control(&enc, AV1E_SET_TUNE_CONTENT, AOM_CONTENT_SCREEN),
+            AOM_CODEC_OK);
+  ASSERT_EQ(aom_codec_control(&enc, AV1E_SET_ENABLE_INTRABC, 1), AOM_CODEC_OK);
+
+  aom_image_t *img = aom_img_alloc(nullptr, AOM_IMG_FMT_I420, width, height, 1);
+  ASSERT_NE(img, nullptr);
+  memset(img->planes[0], 128, img->stride[0] * height);
+  memset(img->planes[1], 128, img->stride[1] * ((height + 1) / 2));
+  memset(img->planes[2], 128, img->stride[2] * ((height + 1) / 2));
+  ::libaom_test::ACMRandom rnd;
+  rnd.Reset(::libaom_test::ACMRandom::DeterministicSeed());
+  for (int r = 0; r < kPatchSize; ++r) {
+    uint8_t *src = img->planes[0] + (src_y + r) * img->stride[0] + src_x;
+    uint8_t *dst = img->planes[0] + (dst_y + r) * img->stride[0] + dst_x;
+    for (int c = 0; c < kPatchSize; ++c) {
+      src[c] = (rnd.Rand8() & 1) ? 16 : 235;
+    }
+    memcpy(dst, src, kPatchSize);
+  }
+
+  aom_codec_ctx_t dec;
+  ASSERT_EQ(aom_codec_dec_init(&dec, aom_codec_av1_dx(), nullptr, 0),
+            AOM_CODEC_OK);
+  ASSERT_EQ(aom_codec_encode(&enc, img, 0, 1, 0), AOM_CODEC_OK);
+  aom_codec_iter_t iter = nullptr;
+  while (const aom_codec_cx_pkt_t *pkt = aom_codec_get_cx_data(&enc, &iter)) {
+    if (pkt->kind != AOM_CODEC_CX_FRAME_PKT) continue;
+    EXPECT_EQ(aom_codec_decode(
+                  &dec, static_cast<const uint8_t *>(pkt->data.frame.buf),
+                  pkt->data.frame.sz, nullptr),
+              AOM_CODEC_OK)
+        << aom_codec_error_detail(&dec);
+  }
+
+  aom_img_free(img);
+  ASSERT_EQ(aom_codec_destroy(&dec), AOM_CODEC_OK);
+  ASSERT_EQ(aom_codec_destroy(&enc), AOM_CODEC_OK);
+}
+
+// The match is 2048 pixels to the left.
+TEST(EncodeAPI, IntraBCFarCopyLeftRealtime) {
+  IntraBCFarCopyTest(2112, 64, 0, 0, 2048, 0);
+}
+
+// The match is 2048 pixels above.
+TEST(EncodeAPI, IntraBCFarCopyAboveRealtime) {
+  IntraBCFarCopyTest(64, 2112, 0, 0, 0, 2048);
+}
+
+// The match is 2056 pixels to the right and 512 pixels above. The difference
+// from the reference DV is past the end of the DV cost table, which ASan
+// reports as a heap buffer overflow.
+TEST(EncodeAPI, IntraBCFarCopyAboveRightRealtime) {
+  IntraBCFarCopyTest(2120, 576, 2056, 0, 0, 512);
+}
+#endif  // CONFIG_AV1_DECODER
 
 #if !CONFIG_REALTIME_ONLY
 // Tests that search_site_cfg[SS_CFG_LOOKAHEAD] in init_motion_estimation() is

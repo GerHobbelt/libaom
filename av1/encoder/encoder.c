@@ -2800,7 +2800,8 @@ static inline int extend_borders_mt(const AV1_COMP *cpi,
     // of the current and above superblock row is complete.
     case MOD_LPF: return 0;
     case MOD_CDEF:
-      return is_cdef_used(cm) && !cpi->ppi->rtc_ref.non_reference_frame &&
+      return is_cdef_used(cm) && !cm->features.allow_intrabc &&
+             !cpi->ppi->rtc_ref.non_reference_frame &&
              !is_restoration_used(cm) && !av1_superres_scaled(cm);
     case MOD_LR:
       return is_restoration_used(cm) &&
@@ -4063,14 +4064,20 @@ static inline int selective_disable_cdf_rtc(const AV1_COMP *cpi) {
   // For single layer.
   if (cpi->svc.number_spatial_layers == 1 &&
       cpi->svc.number_temporal_layers == 1) {
+    const CYCLIC_REFRESH *const cr = cpi->cyclic_refresh;
     // Don't disable on intra_only, scene change (high_source_sad = 1),
     // or resized frame. To avoid quality loss force enable at
     // for ~30 frames after key or scene/slide change, and
     // after 8 frames since last update if frame_source_sad > 0.
+    // The cyclic refresh counter only advances on frames that apply
+    // cyclic refresh. An active map can keep cyclic refresh off for the
+    // whole stream, so use frames_since_scene_change then.
     if (frame_is_intra_only(cm) || is_frame_resize_pending(cpi) ||
         rc->high_source_sad || rc->frames_since_key < 30 ||
         (cpi->oxcf.q_cfg.aq_mode == CYCLIC_REFRESH_AQ &&
-         cpi->cyclic_refresh->counter_encode_maxq_scene_change < 30) ||
+         (cr->apply_cyclic_refresh || !cpi->active_map.enabled
+              ? cr->counter_encode_maxq_scene_change
+              : rc->frames_since_scene_change) < 30) ||
         (cpi->frames_since_last_update > 8 && cpi->rc.frame_source_sad > 0))
       return 0;
     else
